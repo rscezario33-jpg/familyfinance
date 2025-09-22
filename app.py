@@ -81,14 +81,22 @@ user = _user()
 assert user, "Sessão inválida"
 
 # =========================================================
-# Bootstrap da família/membro (tolerante a RLS, com UPSERT)
+# Bootstrap da família/membro (RPC SECURITY DEFINER + fallback)
 #  - NÃO passe o client como parâmetro de função cacheada
 # =========================================================
 @st.cache_data(show_spinner=False)
 def ensure_household_and_member(user_id: str) -> dict:
     sb_local = get_supabase()
 
-    # 1) Tenta pegar o member do usuário (pode vir vazio)
+    # 0) Tenta o RPC (preferido)
+    try:
+        res = sb_local.rpc("create_household_and_member", {"display_name": "Você"}).execute().data
+        if res and len(res) > 0:
+            return {"household_id": res[0]["household_id"], "member_id": res[0]["member_id"]}
+    except Exception:
+        pass  # cai no fallback abaixo
+
+    # Fallback: caminho antigo, tolerante a RLS
     try:
         m = sb_local.table("members").select("*").eq("user_id", user_id).limit(1).execute().data
     except Exception:
@@ -96,16 +104,13 @@ def ensure_household_and_member(user_id: str) -> dict:
     if m:
         return {"household_id": m[0]["household_id"], "member_id": m[0]["id"]}
 
-    # 2) Tenta reaproveitar household criada por mim
     try:
         hh_list = sb_local.table("households").select("id").eq("created_by", user_id).limit(1).execute().data
     except Exception:
         hh_list = []
-
     if hh_list:
         hh_id = hh_list[0]["id"]
     else:
-        # 3) Cria a household
         hh = sb_local.table("households").insert({
             "name": "Minha Família",
             "currency": "BRL",
@@ -113,7 +118,6 @@ def ensure_household_and_member(user_id: str) -> dict:
         }).execute().data[0]
         hh_id = hh["id"]
 
-    # 4) Garante o member (owner) por UPSERT (precisa da policy de UPDATE do próprio registro)
     mem = sb_local.table("members").upsert({
         "household_id": hh_id,
         "user_id": user_id,
@@ -121,12 +125,10 @@ def ensure_household_and_member(user_id: str) -> dict:
         "role": "owner"
     }, on_conflict="household_id,user_id").execute().data
 
-    # A API pode devolver lista vazia no upsert; buscamos o id em seguida
     if not mem:
         mem = sb_local.table("members").select("id").eq("user_id", user_id).eq("household_id", hh_id).limit(1).execute().data
     mem_id = mem[0]["id"]
 
-    # 5) Categorias padrão (idempotente simples)
     base_cats = [
         ("Salário","income"), ("Extras","income"),
         ("Mercado","expense"), ("Moradia","expense"),
@@ -139,9 +141,8 @@ def ensure_household_and_member(user_id: str) -> dict:
                 "household_id": hh_id, "name": n, "kind": k
             }).execute()
         except Exception:
-            pass  # já existe
+            pass
 
-    # 6) Conta padrão (idempotente simples)
     try:
         sb_local.table("accounts").insert({
             "household_id": hh_id,
