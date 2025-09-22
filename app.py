@@ -49,7 +49,7 @@ with st.sidebar:
                 except Exception as e:
                     msg = str(e)
                     if ("Email not confirmed" in msg) or ("email_not_confirmed" in msg):
-                        st.error("Seu e-mail ainda não foi confirmado. Verifique sua caixa de entrada ou reenviar confirmação no painel de Auth.")
+                        st.error("Seu e-mail ainda não foi confirmado. Verifique sua caixa de entrada ou reenvie a confirmação.")
                     else:
                         st.error(f"Falha no login: {msg}")
         with tab_signup:
@@ -81,22 +81,22 @@ user = _user()
 assert user, "Sessão inválida"
 
 # =========================================================
-# Bootstrap da família/membro (tolerante a RLS)
-# - NÃO passe o client como parâmetro de função cacheada
+# Bootstrap da família/membro (tolerante a RLS, com UPSERT)
+#  - NÃO passe o client como parâmetro de função cacheada
 # =========================================================
 @st.cache_data(show_spinner=False)
 def ensure_household_and_member(user_id: str) -> dict:
     sb_local = get_supabase()
 
-    # 1) Tenta obter 'members' do próprio usuário (pode vir vazio; RLS patch recomendado: policy members_select_own)
+    # 1) Tenta pegar o member do usuário (pode vir vazio)
     try:
-        m = sb_local.table("members").select("*").eq("user_id", user_id).execute().data
+        m = sb_local.table("members").select("*").eq("user_id", user_id).limit(1).execute().data
     except Exception:
         m = []
     if m:
         return {"household_id": m[0]["household_id"], "member_id": m[0]["id"]}
 
-    # 2) Se não há member, tenta reaproveitar household criada por mim (policy households_select_creator ajuda)
+    # 2) Tenta reaproveitar household criada por mim
     try:
         hh_list = sb_local.table("households").select("id").eq("created_by", user_id).limit(1).execute().data
     except Exception:
@@ -113,21 +113,20 @@ def ensure_household_and_member(user_id: str) -> dict:
         }).execute().data[0]
         hh_id = hh["id"]
 
-    # 4) Cria o member owner (idempotente: se já existir unique, o Supabase retorna erro e ignoramos)
-    try:
-        mem = sb_local.table("members").insert({
-            "household_id": hh_id,
-            "user_id": user_id,
-            "display_name": "Você",
-            "role": "owner"
-        }).execute().data[0]
-        mem_id = mem["id"]
-    except Exception:
-        # Caso já exista, tenta selecionar novamente (agora deve funcionar)
-        mem_exist = sb_local.table("members").select("id").eq("user_id", user_id).eq("household_id", hh_id).limit(1).execute().data
-        mem_id = mem_exist[0]["id"] if mem_exist else None
+    # 4) Garante o member (owner) por UPSERT (precisa da policy de UPDATE do próprio registro)
+    mem = sb_local.table("members").upsert({
+        "household_id": hh_id,
+        "user_id": user_id,
+        "display_name": "Você",
+        "role": "owner"
+    }, on_conflict="household_id,user_id").execute().data
 
-    # 5) Categorias padrão (idempotente simples: tenta inserir; se já existir unique(name,kind) por família, ignore)
+    # A API pode devolver lista vazia no upsert; buscamos o id em seguida
+    if not mem:
+        mem = sb_local.table("members").select("id").eq("user_id", user_id).eq("household_id", hh_id).limit(1).execute().data
+    mem_id = mem[0]["id"]
+
+    # 5) Categorias padrão (idempotente simples)
     base_cats = [
         ("Salário","income"), ("Extras","income"),
         ("Mercado","expense"), ("Moradia","expense"),
@@ -142,7 +141,7 @@ def ensure_household_and_member(user_id: str) -> dict:
         except Exception:
             pass  # já existe
 
-    # 6) Conta padrão
+    # 6) Conta padrão (idempotente simples)
     try:
         sb_local.table("accounts").insert({
             "household_id": hh_id,
@@ -152,7 +151,7 @@ def ensure_household_and_member(user_id: str) -> dict:
             "currency": "BRL"
         }).execute()
     except Exception:
-        pass  # já existe
+        pass
 
     return {"household_id": hh_id, "member_id": mem_id}
 
@@ -180,7 +179,7 @@ with st.form("novo_membro"):
         try:
             sb.table("members").insert({
                 "household_id": HOUSEHOLD_ID,
-                "user_id": user.id,         # opcionalmente, poderia convidar outro usuário no futuro
+                "user_id": user.id,         # futuro: convite para outro usuário
                 "display_name": nm.strip(),
                 "role": "member"
             }).execute()
