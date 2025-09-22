@@ -10,9 +10,14 @@ from supabase_client import get_supabase
 st.set_page_config(page_title="Finanças Familiares — Matriz & Filiais", layout="wide")
 st.title("🏦 Finanças Familiares — Matriz & Filiais")
 
+# =========================================================
+# Conexão (um único client, cacheado via cache_resource)
+# =========================================================
 sb = get_supabase()
 
-# ================= Auth =================
+# =========================================================
+# Autenticação (Supabase Auth)
+# =========================================================
 def _signin(email: str, password: str):
     return sb.auth.sign_in_with_password({"email": email, "password": password})
 
@@ -32,8 +37,8 @@ with st.sidebar:
         st.session_state.auth_ok = False
 
     if not st.session_state.auth_ok:
-        tab1, tab2 = st.tabs(["Entrar", "Criar conta"])
-        with tab1:
+        tab_login, tab_signup = st.tabs(["Entrar", "Criar conta"])
+        with tab_login:
             le = st.text_input("Email")
             lp = st.text_input("Senha", type="password")
             if st.button("Entrar"):
@@ -43,17 +48,17 @@ with st.sidebar:
                     st.rerun()
                 except Exception as e:
                     msg = str(e)
-                    if "Email not confirmed" in msg or "email_not_confirmed" in msg:
-                        st.error("Seu e-mail ainda não foi confirmado. Verifique sua caixa de entrada ou reenvie a confirmação.")
+                    if ("Email not confirmed" in msg) or ("email_not_confirmed" in msg):
+                        st.error("Seu e-mail ainda não foi confirmado. Verifique sua caixa de entrada ou reenviar confirmação no painel de Auth.")
                     else:
                         st.error(f"Falha no login: {msg}")
-        with tab2:
+        with tab_signup:
             ne = st.text_input("Email (novo)")
             np = st.text_input("Senha (nova)", type="password")
             if st.button("Criar conta"):
                 try:
                     _signup(ne, np)
-                    st.success("Conta criada. Depois faça login (ou confirme o e-mail, se estiver habilitado).")
+                    st.success("Conta criada. Depois faça login (ou confirme o e-mail, se exigido).")
                 except Exception as e:
                     st.error(f"Falha no cadastro: {e}")
     else:
@@ -75,33 +80,54 @@ if not st.session_state.auth_ok:
 user = _user()
 assert user, "Sessão inválida"
 
-# ============ Bootstrap família/membro ============
-# IMPORTANTE: não passe objetos não-hashable (ex.: Client) como parâmetro de função cacheada
+# =========================================================
+# Bootstrap da família/membro (tolerante a RLS)
+# - NÃO passe o client como parâmetro de função cacheada
+# =========================================================
 @st.cache_data(show_spinner=False)
 def ensure_household_and_member(user_id: str) -> dict:
-    sb_local = get_supabase()  # pega o client por dentro (não vira parâmetro do cache)
+    sb_local = get_supabase()
 
-    # já é membro de alguma família?
-    m = sb_local.table("members").select("*").eq("user_id", user_id).execute().data
+    # 1) Tenta obter 'members' do próprio usuário (pode vir vazio; RLS patch recomendado: policy members_select_own)
+    try:
+        m = sb_local.table("members").select("*").eq("user_id", user_id).execute().data
+    except Exception:
+        m = []
     if m:
         return {"household_id": m[0]["household_id"], "member_id": m[0]["id"]}
 
-    # cria família padrão
-    hh = sb_local.table("households").insert({
-        "name": "Minha Família",
-        "currency": "BRL",
-        "created_by": user_id
-    }).execute().data[0]
+    # 2) Se não há member, tenta reaproveitar household criada por mim (policy households_select_creator ajuda)
+    try:
+        hh_list = sb_local.table("households").select("id").eq("created_by", user_id).limit(1).execute().data
+    except Exception:
+        hh_list = []
 
-    # cria membro dono
-    mem = sb_local.table("members").insert({
-        "household_id": hh["id"],
-        "user_id": user_id,
-        "display_name": "Você",
-        "role": "owner"
-    }).execute().data[0]
+    if hh_list:
+        hh_id = hh_list[0]["id"]
+    else:
+        # 3) Cria a household
+        hh = sb_local.table("households").insert({
+            "name": "Minha Família",
+            "currency": "BRL",
+            "created_by": user_id
+        }).execute().data[0]
+        hh_id = hh["id"]
 
-    # categorias básicas
+    # 4) Cria o member owner (idempotente: se já existir unique, o Supabase retorna erro e ignoramos)
+    try:
+        mem = sb_local.table("members").insert({
+            "household_id": hh_id,
+            "user_id": user_id,
+            "display_name": "Você",
+            "role": "owner"
+        }).execute().data[0]
+        mem_id = mem["id"]
+    except Exception:
+        # Caso já exista, tenta selecionar novamente (agora deve funcionar)
+        mem_exist = sb_local.table("members").select("id").eq("user_id", user_id).eq("household_id", hh_id).limit(1).execute().data
+        mem_id = mem_exist[0]["id"] if mem_exist else None
+
+    # 5) Categorias padrão (idempotente simples: tenta inserir; se já existir unique(name,kind) por família, ignore)
     base_cats = [
         ("Salário","income"), ("Extras","income"),
         ("Mercado","expense"), ("Moradia","expense"),
@@ -109,56 +135,84 @@ def ensure_household_and_member(user_id: str) -> dict:
         ("Lazer","expense"), ("Educação","expense")
     ]
     for n,k in base_cats:
-        sb_local.table("categories").insert({
-            "household_id": hh["id"], "name": n, "kind": k
+        try:
+            sb_local.table("categories").insert({
+                "household_id": hh_id, "name": n, "kind": k
+            }).execute()
+        except Exception:
+            pass  # já existe
+
+    # 6) Conta padrão
+    try:
+        sb_local.table("accounts").insert({
+            "household_id": hh_id,
+            "name": "Conta Corrente",
+            "type": "checking",
+            "opening_balance": 0,
+            "currency": "BRL"
         }).execute()
+    except Exception:
+        pass  # já existe
 
-    # conta padrão
-    sb_local.table("accounts").insert({
-        "household_id": hh["id"],
-        "name": "Conta Corrente",
-        "type": "checking",
-        "opening_balance": 0,
-        "currency": "BRL"
-    }).execute()
-
-    return {"household_id": hh["id"], "member_id": mem["id"]}
+    return {"household_id": hh_id, "member_id": mem_id}
 
 ids = ensure_household_and_member(user.id)
 HOUSEHOLD_ID = ids["household_id"]
 MY_MEMBER_ID = ids["member_id"]
 
+# =========================================================
+# Sidebar: botão para limpar cache de dados
+# =========================================================
 with st.sidebar:
     if st.button("🔄 Recarregar dados"):
         st.cache_data.clear()
         st.rerun()
 
-# ============ Filiais (membros) ============
+# =========================================================
+# Seção: Filiais (membros)
+# =========================================================
 st.subheader("👪 Filiais (membros)")
+
 with st.form("novo_membro"):
     nm = st.text_input("Nome do membro (filial)")
-    ok = st.form_submit_button("Adicionar")
-    if ok and nm.strip():
-        sb.table("members").insert({
-            "household_id": HOUSEHOLD_ID,
-            "user_id": user.id,
-            "display_name": nm.strip(),
-            "role": "member"
-        }).execute()
-        st.success("Membro adicionado.")
-        st.cache_data.clear()
-        st.rerun()
+    ok_add = st.form_submit_button("Adicionar")
+    if ok_add and nm.strip():
+        try:
+            sb.table("members").insert({
+                "household_id": HOUSEHOLD_ID,
+                "user_id": user.id,         # opcionalmente, poderia convidar outro usuário no futuro
+                "display_name": nm.strip(),
+                "role": "member"
+            }).execute()
+            st.success("Membro adicionado.")
+            st.cache_data.clear()
+            st.rerun()
+        except Exception as e:
+            st.error(f"Falha ao adicionar membro: {e}")
 
-mems = sb.table("members").select("id,display_name,role") \
-        .eq("household_id", HOUSEHOLD_ID).execute().data
-st.dataframe(pd.DataFrame(mems), use_container_width=True)
+try:
+    mems = sb.table("members").select("id,display_name,role") \
+            .eq("household_id", HOUSEHOLD_ID).execute().data
+    st.dataframe(pd.DataFrame(mems), use_container_width=True)
+except Exception as e:
+    st.error(f"Falha ao carregar membros: {e}")
 
 st.markdown("---")
 
-# ============ Lançamento rápido ============
+# =========================================================
+# Seção: Lançamento rápido (teste de persistência)
+# =========================================================
 st.subheader("💸 Lançamento rápido (teste de persistência)")
-cats = sb.table("categories").select("id,name,kind").eq("household_id", HOUSEHOLD_ID).execute().data
-accts = sb.table("accounts").select("id,name").eq("household_id", HOUSEHOLD_ID).eq("is_active", True).execute().data
+
+try:
+    cats = sb.table("categories").select("id,name,kind") \
+            .eq("household_id", HOUSEHOLD_ID).execute().data
+    accts = sb.table("accounts").select("id,name") \
+            .eq("household_id", HOUSEHOLD_ID).eq("is_active", True).execute().data
+except Exception as e:
+    cats, accts = [], []
+    st.error(f"Falha ao carregar combos: {e}")
+
 cat_map = {c["name"]: c for c in cats} or {}
 acc_map = {a["name"]: a for a in accts} or {}
 
@@ -169,39 +223,49 @@ with st.form("form_tx"):
     val = st.number_input("Valor (R$)", min_value=0.0, step=10.0)
     dt = st.date_input("Data", value=date.today())
     desc = st.text_input("Descrição")
-    ok2 = st.form_submit_button("Lançar")
-    if ok2:
-        cat_id = (cat_map.get(cat) or {}).get("id")
-        acc_id = (acc_map.get(acc) or {}).get("id")
-        sb.table("transactions").insert({
-            "household_id": HOUSEHOLD_ID,
-            "member_id": MY_MEMBER_ID,
-            "account_id": acc_id,
-            "type": tipo,
-            "amount": val,
-            "occurred_at": dt.isoformat(),
-            "description": desc,
-            "category_id": cat_id,
-            "created_by": user.id
-        }).execute()
-        st.success("Lançamento registrado.")
-        st.cache_data.clear()
-        st.rerun()
+    ok_tx = st.form_submit_button("Lançar")
+    if ok_tx:
+        try:
+            cat_id = (cat_map.get(cat) or {}).get("id")
+            acc_id = (acc_map.get(acc) or {}).get("id")
+            sb.table("transactions").insert({
+                "household_id": HOUSEHOLD_ID,
+                "member_id": MY_MEMBER_ID,
+                "account_id": acc_id,
+                "type": tipo,
+                "amount": val,
+                "occurred_at": dt.isoformat(),
+                "description": desc,
+                "category_id": cat_id,
+                "created_by": user.id
+            }).execute()
+            st.success("Lançamento registrado.")
+            st.cache_data.clear()
+            st.rerun()
+        except Exception as e:
+            st.error(f"Falha ao lançar transação: {e}")
 
 st.markdown("---")
 
-# ============ Listagem por período ============
+# =========================================================
+# Seção: Listagem do período
+# =========================================================
 st.subheader("📋 Movimentações do mês")
+
 first_day = date.today().replace(day=1)
 start = st.date_input("Início", value=first_day, key="dt_ini")
 end = st.date_input("Fim", value=date.today(), key="dt_fim")
 
-tx = sb.table("transactions").select(
-        "id,occurred_at,type,amount,description"
-    ).eq("household_id", HOUSEHOLD_ID) \
-     .gte("occurred_at", start.isoformat()) \
-     .lte("occurred_at", end.isoformat()) \
-     .order("occurred_at", desc=False).execute().data
+try:
+    tx = sb.table("transactions").select(
+            "id,occurred_at,type,amount,description"
+        ).eq("household_id", HOUSEHOLD_ID) \
+         .gte("occurred_at", start.isoformat()) \
+         .lte("occurred_at", end.isoformat()) \
+         .order("occurred_at", desc=False).execute().data
+except Exception as e:
+    tx = []
+    st.error(f"Falha ao carregar movimentações: {e}")
 
 df = pd.DataFrame(tx)
 if df.empty:
@@ -209,7 +273,7 @@ if df.empty:
 else:
     df["occurred_at"] = pd.to_datetime(df["occurred_at"]).dt.date
     st.dataframe(df, use_container_width=True)
-    saldo = df.apply(lambda r: r["amount"] if r["type"]=="income" else -r["amount"], axis=1).sum()
+    saldo = df.apply(lambda r: r["amount"] if r["type"] == "income" else -r["amount"], axis=1).sum()
     c1, c2 = st.columns(2)
     c1.metric("Lançamentos", len(df))
-    c2.metric("Resultado do período", f"R$ {saldo:,.2f}".replace(",", "X").replace(".", ",").replace("X","."))
+    c2.metric("Resultado do período", f"R$ {saldo:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
