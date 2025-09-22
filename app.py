@@ -5,15 +5,14 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 from datetime import date
-from supabase import Client
 from supabase_client import get_supabase
 
 st.set_page_config(page_title="Finanças Familiares — Matriz & Filiais", layout="wide")
 st.title("🏦 Finanças Familiares — Matriz & Filiais")
 
-sb: Client = get_supabase()
+sb = get_supabase()
 
-# ============ Auth ============
+# ================= Auth =================
 def _signin(email: str, password: str):
     return sb.auth.sign_in_with_password({"email": email, "password": password})
 
@@ -43,14 +42,18 @@ with st.sidebar:
                     st.session_state.auth_ok = True
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Falha no login: {e}")
+                    msg = str(e)
+                    if "Email not confirmed" in msg or "email_not_confirmed" in msg:
+                        st.error("Seu e-mail ainda não foi confirmado. Verifique sua caixa de entrada ou reenvie a confirmação.")
+                    else:
+                        st.error(f"Falha no login: {msg}")
         with tab2:
             ne = st.text_input("Email (novo)")
             np = st.text_input("Senha (nova)", type="password")
             if st.button("Criar conta"):
                 try:
                     _signup(ne, np)
-                    st.success("Conta criada. Depois faça login.")
+                    st.success("Conta criada. Depois faça login (ou confirme o e-mail, se estiver habilitado).")
                 except Exception as e:
                     st.error(f"Falha no cadastro: {e}")
     else:
@@ -73,25 +76,32 @@ user = _user()
 assert user, "Sessão inválida"
 
 # ============ Bootstrap família/membro ============
+# IMPORTANTE: não passe objetos não-hashable (ex.: Client) como parâmetro de função cacheada
 @st.cache_data(show_spinner=False)
-def ensure_household_and_member(sb: Client, user_id: str) -> dict:
-    m = sb.table("members").select("*").eq("user_id", user_id).execute().data
+def ensure_household_and_member(user_id: str) -> dict:
+    sb_local = get_supabase()  # pega o client por dentro (não vira parâmetro do cache)
+
+    # já é membro de alguma família?
+    m = sb_local.table("members").select("*").eq("user_id", user_id).execute().data
     if m:
         return {"household_id": m[0]["household_id"], "member_id": m[0]["id"]}
 
-    hh = sb.table("households").insert({
+    # cria família padrão
+    hh = sb_local.table("households").insert({
         "name": "Minha Família",
         "currency": "BRL",
         "created_by": user_id
     }).execute().data[0]
 
-    mem = sb.table("members").insert({
+    # cria membro dono
+    mem = sb_local.table("members").insert({
         "household_id": hh["id"],
         "user_id": user_id,
         "display_name": "Você",
         "role": "owner"
     }).execute().data[0]
 
+    # categorias básicas
     base_cats = [
         ("Salário","income"), ("Extras","income"),
         ("Mercado","expense"), ("Moradia","expense"),
@@ -99,11 +109,12 @@ def ensure_household_and_member(sb: Client, user_id: str) -> dict:
         ("Lazer","expense"), ("Educação","expense")
     ]
     for n,k in base_cats:
-        sb.table("categories").insert({
+        sb_local.table("categories").insert({
             "household_id": hh["id"], "name": n, "kind": k
         }).execute()
 
-    sb.table("accounts").insert({
+    # conta padrão
+    sb_local.table("accounts").insert({
         "household_id": hh["id"],
         "name": "Conta Corrente",
         "type": "checking",
@@ -113,7 +124,7 @@ def ensure_household_and_member(sb: Client, user_id: str) -> dict:
 
     return {"household_id": hh["id"], "member_id": mem["id"]}
 
-ids = ensure_household_and_member(sb, user.id)
+ids = ensure_household_and_member(user.id)
 HOUSEHOLD_ID = ids["household_id"]
 MY_MEMBER_ID = ids["member_id"]
 
