@@ -1,15 +1,23 @@
-# app.py — Family Finance v8.0.2 (login/signup validation + use_container_width)
+# app.py — Family Finance v8.1.0
+# (sidebar contraste + logos 50% + fixas com valor pago + anexos + lembretes por e-mail)
 from __future__ import annotations
 from datetime import date, datetime, timedelta
 import uuid
+import io
+import os
+import smtplib
+from email.message import EmailMessage
+from typing import List, Optional
+
 import pandas as pd
 import streamlit as st
+
 from supabase_client import get_supabase
 
 st.set_page_config(page_title="Family Finance", layout="wide")
 
 # =========================
-# CSS (visual Family Finance + sidebar navy "modelo 3")
+# CSS (visual + contraste sidebar)
 # =========================
 st.markdown("""
 <style>
@@ -19,11 +27,23 @@ section[data-testid="stSidebar"] > div {
   color: #f0f6ff !important;
   padding-top: 14px;
 }
-section[data-testid="stSidebar"] img {
-  display:block; margin: 6px auto 14px auto;
+/* Contraste nos textos da sidebar */
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] > div,
+section[data-testid="stSidebar"] .stMarkdown,
+section[data-testid="stSidebar"] p,
+section[data-testid="stSidebar"] span {
+  color:#f0f6ff !important;
 }
-.sidebar-title { color:#a7c3ff; font-weight:700; letter-spacing:.6px; text-transform:uppercase; font-size:.80rem; margin: 6px 0 6px 6px; }
+/* Imagens e títulos */
+section[data-testid="stSidebar"] img { display:block; margin: 6px auto 14px auto; }
+.sidebar-title {
+  color:#e6f0ff; font-weight:700; letter-spacing:.6px; text-transform:uppercase;
+  font-size:.80rem; margin: 6px 0 6px 6px;
+}
 .sidebar-group { border-top:1px solid rgba(255,255,255,.08); margin:10px 0 8px 0; padding-top:8px; }
+
+/* Botões/inputs */
 .stButton>button, .stDownloadButton>button {
   border-radius:10px; padding:.55rem .9rem; font-weight:600; border:1px solid #0ea5e9; background:#0ea5e9; color:white;
 }
@@ -31,6 +51,8 @@ section[data-testid="stSidebar"] img {
 .stSelectbox div[data-baseweb="select"] > div, .stTextInput input, .stNumberInput input, .stDateInput input {
   border-radius:10px !important;
 }
+
+/* Cards e badges */
 .card { background: linear-gradient(180deg,#fff 0%,#f8fafc 100%);
   border:1px solid #e2e8f0; border-radius:16px; padding:16px 18px;
   box-shadow:0 6px 20px rgba(0,0,0,.06); margin-bottom:12px; }
@@ -42,20 +64,62 @@ section[data-testid="stSidebar"] img {
 </style>
 """, unsafe_allow_html=True)
 
+# =========================
+# Conexão Supabase
+# =========================
 sb = get_supabase()
 
 # =========================
-# Auth
+# Helpers utilitários
 # =========================
-def _signin(email, password): sb.auth.sign_in_with_password({"email": email, "password": password})
-def _signup(email, password): sb.auth.sign_up({"email": email, "password": password})
+def to_brl(v: float) -> str:
+    try:
+        return f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return "R$ 0,00"
+
+def _to_date_safe(s):
+    if not s: return None
+    try:
+        return datetime.fromisoformat(str(s)).date()
+    except Exception:
+        for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+            try: return datetime.strptime(str(s)[:len(fmt)], fmt).date()
+            except Exception: pass
+    return None
+
+def _safe_table(name: str):
+    try:
+        return sb.table(name).select("*").eq("household_id", HOUSEHOLD_ID).execute().data or []
+    except Exception:
+        return []
+
+# =========================
+# Auth wrappers
+# =========================
+def _signin(email, password): 
+    sb.auth.sign_in_with_password({"email": email, "password": password})
+
+def _signup(email, password):
+    try:
+        sb.auth.sign_up({"email": email, "password": password})
+    except OSError as e:
+        if getattr(e, "errno", None) == -2:
+            raise RuntimeError("Falha de rede/DNS ao contatar o Supabase.")
+        raise
+
 def _signout(): sb.auth.sign_out()
+
 def _user():
     sess = sb.auth.get_session()
     return sess.user if sess and sess.user else None
 
+# =========================
+# Sidebar (logos 50% + Powered by)
+# =========================
 with st.sidebar:
-    st.image("assets/logo_family_finance.png", use_container_width=True)
+    # Logo FF reduzida (metade aproximada)
+    st.image("assets/logo_family_finance.png", width=110)
     st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
 
     if "auth_ok" not in st.session_state: st.session_state.auth_ok = False
@@ -113,9 +177,10 @@ with st.sidebar:
         _signout(); st.session_state.auth_ok = False; st.rerun()
 
     st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
-    st.image("assets/logo_automaGO.png", use_container_width=True)
+    st.markdown('<div class="small" style="text-align:center;opacity:.9;">Powered by</div>', unsafe_allow_html=True)
+    st.image("assets/logo_automaGO.png", width=80)
 
-user = _user(); assert user
+user = _user(); assert user  # precisa estar logado daqui pra frente
 
 # =========================
 # Bootstrap household/member
@@ -131,25 +196,8 @@ ids = bootstrap(user.id)
 HOUSEHOLD_ID = ids["household_id"]; MY_MEMBER_ID = ids["member_id"]
 
 # =========================
-# Helpers
+# Data fetchers
 # =========================
-def to_brl(v: float) -> str:
-    try: return f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-    except Exception: return "R$ 0,00"
-
-def _to_date_safe(s):
-    if not s: return None
-    try: return datetime.fromisoformat(str(s)).date()
-    except Exception:
-        for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
-            try: return datetime.strptime(str(s)[:len(fmt)], fmt).date()
-            except Exception: pass
-    return None
-
-def _safe_table(name: str):
-    try: return sb.table(name).select("*").eq("household_id", HOUSEHOLD_ID).execute().data or []
-    except Exception: return []
-
 def fetch_members():
     try:
         return sb.table("members").select("id,display_name,role") \
@@ -216,10 +264,94 @@ def fetch_tx_due(start: date, end: date):
     return out
 
 # =========================
-# ENTRADA
+# SMTP (opcional) — envio de lembretes
+# =========================
+def _smtp_cfg():
+    cfg = getattr(st.secrets, "smtp", None) if hasattr(st, "secrets") else None
+    if not cfg: return None
+    return {
+        "host": cfg.get("host"),
+        "port": int(cfg.get("port", 587)),
+        "user": cfg.get("user"),
+        "password": cfg.get("password"),
+        "from_email": cfg.get("from_email", cfg.get("user")),
+        "use_tls": bool(cfg.get("use_tls", True)),
+    }
+
+def send_email(to_emails: List[str], subject: str, body: str, attach_name: Optional[str]=None, attach_bytes: Optional[bytes]=None):
+    smtp = _smtp_cfg()
+    if not smtp:
+        # silencioso: sem SMTP configurado
+        return False
+    try:
+        msg = EmailMessage()
+        msg["Subject"] = subject
+        msg["From"] = smtp["from_email"]
+        msg["To"] = ", ".join(to_emails)
+        msg.set_content(body)
+
+        if attach_bytes and attach_name:
+            msg.add_attachment(attach_bytes, maintype="application", subtype="octet-stream", filename=attach_name)
+
+        with smtplib.SMTP(smtp["host"], smtp["port"]) as s:
+            if smtp["use_tls"]:
+                s.starttls()
+            if smtp["user"]:
+                s.login(smtp["user"], smtp["password"])
+            s.send_message(msg)
+        return True
+    except Exception:
+        return False
+
+@st.cache_data(show_spinner=False)
+def _today_str():  # usado pra “resetar” lembretes por dia
+    return date.today().isoformat()
+
+def notify_due_bills():
+    # evita repetir notificações no mesmo dia em cada sessão
+    key = f"__notified__{_today_str()}"
+    if st.session_state.get(key): 
+        return
+    try:
+        start = date.today()
+        end = date.today() + timedelta(days=3)
+        txs = fetch_tx_due(start, end)
+        if not txs: 
+            st.session_state[key] = True
+            return
+        # filtra despesas não pagas
+        pend = [t for t in txs if (t.get("type")=="expense" and not t.get("is_paid"))]
+        if not pend:
+            st.session_state[key] = True
+            return
+        # envia para o usuário logado (membros adicionais exigiriam e-mails dos usuários vinculados)
+        to = [user.email] if user and user.email else []
+        if not to:
+            st.session_state[key] = True
+            return
+        lines=[]
+        for t in pend:
+            due = _to_date_safe(t.get("due_date")) or _to_date_safe(t.get("occurred_at"))
+            val = t.get("planned_amount") or t.get("amount") or 0.0
+            lines.append(f"- {t.get('description','(sem descrição)')} — vence em {due.strftime('%d/%m/%Y')} — {to_brl(val)}")
+        if lines:
+            subject = "Lembrete: contas a vencer (3 dias / hoje)"
+            body = "Olá!\n\nAs seguintes contas vencem em até 3 dias (ou hoje):\n\n" + "\n".join(lines) + "\n\n— Family Finance"
+            send_email(to, subject, body)
+    finally:
+        st.session_state[key] = True
+
+# dispara lembretes (não bloqueia fluxo)
+notify_due_bills()
+
+# =========================
+# UI
 # =========================
 st.title("Family Finance")
 
+# =========================
+# ENTRADA
+# =========================
 if section == "🏠 Entrada":
     first_day = date.today().replace(day=1)
     txm = fetch_tx(first_day, date.today())
@@ -270,8 +402,10 @@ if section == "💼 Financeiro":
                 method = st.selectbox("Forma de pagamento", ["account","card"], index=0, format_func=lambda x: "Conta" if x=="account" else "Cartão")
                 acc = st.selectbox("Conta", list(acc_map.keys()) or ["Conta Corrente"])
                 card_name = st.selectbox("Cartão (se aplicável)", ["—"] + list(card_map.keys()))
-                parcelado = st.checkbox("Parcelado?")
-                n_parc = st.number_input("Nº parcelas", min_value=2, max_value=36, value=2, disabled=not parcelado)
+                parcelado = st.checkbox("Parcelado? (somente despesa)")
+                n_parc = st.number_input("Nº parcelas", min_value=2, max_value=36, value=2, disabled=not (parcelado and tipo=="expense"))
+            # Anexo opcional (boleto)
+            boleto = st.file_uploader("Anexar boleto (PDF/JPG/PNG) — opcional", type=["pdf","jpg","jpeg","png"])
             ok = st.form_submit_button("Lançar")
 
             if ok:
@@ -279,6 +413,16 @@ if section == "💼 Financeiro":
                     cat_id = (cat_map.get(cat) or {}).get("id")
                     acc_id = (acc_map.get(acc) or {}).get("id")
                     card_id = (card_map.get(card_name) or {}).get("id") if method=="card" and card_name!="—" else None
+                    attachment_url = None
+
+                    # upload do boleto (se houver)
+                    if boleto is not None:
+                        ext = os.path.splitext(boleto.name)[1].lower()
+                        key = f"{HOUSEHOLD_ID}/{uuid.uuid4().hex}{ext}"
+                        data_bytes = boleto.read()
+                        sb.storage.from_("boletos").upload(key, data_bytes)  # bucket precisa existir
+                        # se o bucket for público:
+                        attachment_url = sb.storage.from_("boletos").get_public_url(key)
 
                     if tipo=="expense" and parcelado:
                         sb.rpc("create_installments", {
@@ -306,6 +450,7 @@ if section == "💼 Financeiro":
                             "description": desc,
                             "payment_method": method,
                             "card_id": card_id,
+                            "attachment_url": attachment_url,
                             "created_by": user.id
                         }).execute()
                     st.toast("✅ Lançamento registrado!", icon="✅"); st.cache_data.clear(); st.rerun()
@@ -320,32 +465,60 @@ if section == "💼 Financeiro":
         ini = st.date_input("Início", value=date.today().replace(day=1), key="mv_ini")
         fim = st.date_input("Fim", value=date.today(), key="mv_fim")
         tx = fetch_tx(ini, fim)
-        if not tx: st.info("Sem lançamentos.")
+        if not tx: 
+            st.info("Sem lançamentos.")
         else:
             df = pd.DataFrame(tx)
             df["Data"] = pd.to_datetime(df.get("occurred_at"), errors="coerce").dt.strftime("%d/%m/%Y")
             df["Venc"] = pd.to_datetime(df.get("due_date"), errors="coerce").dt.strftime("%d/%m/%Y")
             df["Tipo"] = df.get("type").map({"income":"Receita","expense":"Despesa"})
-            df["Previsto"] = df.get("planned_amount").fillna(df.get("amount")).fillna(0.0)
+            # Previsto x Pago
+            df["Previsto (R$)"] = (df.get("planned_amount").fillna(df.get("amount")).fillna(0.0)).astype(float)
             df["Pago?"] = df.get("is_paid").fillna(False)
             df["Pago (R$)"] = df.get("paid_amount").fillna("")
-            st.dataframe(df[["Data","Venc","Tipo","description","Previsto","Pago?","Pago (R$)","attachment_url","id"]]
-                        .rename(columns={"description":"Descrição","attachment_url":"Boleto"}),
-                        use_container_width=True, hide_index=True)
+            st.dataframe(
+                df[["Data","Venc","Tipo","description","Previsto (R$)","Pago?","Pago (R$)","attachment_url","id"]]
+                .rename(columns={"description":"Descrição","attachment_url":"Boleto"}),
+                use_container_width=True, hide_index=True
+            )
 
-            st.markdown("### Marcar pagamento")
+            st.markdown("### Marcar pagamento / Anexar boleto")
             tx_id  = st.selectbox("Transação", df["id"])
-            pago_v = st.number_input("Valor pago (R$)", min_value=0.0, step=10.0)
+            # Valor pago: se não preencher, usa o previsto da transação
+            pago_v = st.number_input("Valor pago (R$) — deixe 0 para usar o previsto", min_value=0.0, step=10.0)
             pago_d = st.date_input("Data pagamento", value=date.today())
-            if st.button("✅ Confirmar pagamento"):
-                try:
-                    sb.rpc("mark_transaction_paid", {"p_tx_id": tx_id, "p_amount": pago_v, "p_date": pago_d.isoformat()}).execute()
-                    st.toast("Pagamento registrado!", icon="✅"); st.cache_data.clear(); st.rerun()
-                except Exception as e:
-                    st.error(f"Falha ao marcar pago: {e}")
+            novo_boleto = st.file_uploader("Anexar/atualizar boleto", type=["pdf","jpg","jpeg","png"], key="mv_bol")
+
+            col_a, col_b = st.columns(2)
+            with col_a:
+                if st.button("✅ Confirmar pagamento"):
+                    try:
+                        # pega previsto da transação selecionada
+                        row = df[df["id"]==tx_id].iloc[0]
+                        previsto = float(row["Previsto (R$)"]) if row is not None else 0.0
+                        valor_final = pago_v if pago_v > 0 else previsto
+                        sb.rpc("mark_transaction_paid", {"p_tx_id": tx_id, "p_amount": valor_final, "p_date": pago_d.isoformat()}).execute()
+                        st.toast("Pagamento registrado!", icon="✅"); st.cache_data.clear(); st.rerun()
+                    except Exception as e:
+                        st.error(f"Falha ao marcar pago: {e}")
+            with col_b:
+                if st.button("📎 Salvar anexo"):
+                    try:
+                        if novo_boleto is None:
+                            st.warning("Selecione um arquivo para anexar.")
+                        else:
+                            ext = os.path.splitext(novo_boleto.name)[1].lower()
+                            key = f"{HOUSEHOLD_ID}/{tx_id}{ext}"
+                            data_bytes = novo_boleto.read()
+                            sb.storage.from_("boletos").upload(key, data_bytes, {"upsert": True})
+                            url = sb.storage.from_("boletos").get_public_url(key)
+                            sb.table("transactions").update({"attachment_url": url}).eq("id", tx_id).execute()
+                            st.toast("Anexo salvo!", icon="📎"); st.cache_data.clear(); st.rerun()
+                    except Exception as e:
+                        st.error(f"Falha ao anexar: {e}")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # Fixas (previsto/pago + cópia para meses)
+    # Fixas (cria lançamentos previstos; pagamento é controlado em Movimentações)
     with tabs[2]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("♻️ Receitas/Despesas fixas")
@@ -413,7 +586,7 @@ if section == "💼 Financeiro":
                     st.toast("✅ Fixas criadas!", icon="✅"); st.cache_data.clear(); st.rerun()
                 except Exception as e:
                     st.error(f"Falha: {e}")
-        st.caption("Pagamentos são confirmados na tela **Movimentações**. Se não informar 'Valor pago', vale o previsto.")
+        st.caption("💡 O pagamento/valor pago é marcado na aba **Movimentações**. Se não informar o valor, o resultado usa o **previsto**; a **data de pagamento** padrão é o dia marcado.")
         st.markdown('</div>', unsafe_allow_html=True)
 
     # Orçamentos
@@ -446,6 +619,7 @@ if section == "💼 Financeiro":
         else:
             df = pd.DataFrame(txx)
             def eff(r):
+                # Usa pago se pago; senão previsto/amount — positivo para receita, negativo para despesa
                 v = r.get("paid_amount") if r.get("is_paid") else (r.get("planned_amount") or r.get("amount") or 0)
                 return v if r.get("type")=="income" else -v
             df["Quando"] = pd.to_datetime(df.get("due_date").fillna(df.get("occurred_at")), errors="coerce").dt.date
