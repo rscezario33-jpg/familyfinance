@@ -1,10 +1,11 @@
 streamlit==1.38.0
+pandas==2.2.2
+python-dateutil==2.9.0.post0
+
 supabase==2.6.0
 httpx==0.27.2
 httpcore==1.0.5
-postgrest==0.15.2
+postgrest==0.15.3      # <- 0.15.3 existe; 0.15.2 quebra
 gotrue==2.6.0
 storage3==0.7.7
 realtime==2.0.3
-pandas==2.2.2
-python-dateutil==2.9.0.post0
