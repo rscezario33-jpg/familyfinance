@@ -1,4 +1,4 @@
-# app.py — v7.2
+# app.py — v7.3
 from __future__ import annotations
 from datetime import date, datetime, timedelta
 import uuid
@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 from supabase_client import get_supabase
 
-st.set_page_config(page_title="Finanças Familiares — v7.2", layout="wide")
+st.set_page_config(page_title="Finanças Familiares — v7.3", layout="wide")
 
 # ====== estilo ======
 st.markdown("""
@@ -81,7 +81,7 @@ if not st.session_state.auth_ok:
 user = _user()
 assert user, "Usuário não autenticado."
 
-# ====== bootstrap (aceita convites + cria família/membro) ======
+# ====== bootstrap ======
 @st.cache_data(show_spinner=False)
 def bootstrap(user_id: str):
     try:
@@ -111,14 +111,20 @@ def fetch_members():
     try:
         return q.order("display_name", desc=False).execute().data
     except Exception:
-        return q.execute().data
+        try:
+            return q.execute().data
+        except Exception:
+            return []
 
 def fetch_categories():
     q = sb.table("categories").select("id,name,kind").eq("household_id", HOUSEHOLD_ID)
     try:
         return q.order("name", desc=False).execute().data
     except Exception:
-        return q.execute().data
+        try:
+            return q.execute().data
+        except Exception:
+            return []
 
 def fetch_accounts(active_only=False):
     q = sb.table("accounts").select("id,name,is_active,type").eq("household_id", HOUSEHOLD_ID)
@@ -127,16 +133,27 @@ def fetch_accounts(active_only=False):
     try:
         return q.order("name", desc=False).execute().data
     except Exception:
-        return q.execute().data
+        try:
+            return q.execute().data
+        except Exception:
+            return []
 
 def fetch_cards(active_only=True):
-    q = sb.table("credit_cards").select("id,name,limit_amount,closing_day,due_day,is_active").eq("household_id", HOUSEHOLD_ID)
-    if active_only:
-        q = q.eq("is_active", True)
+    """
+    RLS-safe: se qualquer SELECT falhar (RLS/policy), retorna [].
+    """
     try:
-        return q.order("name", desc=False).execute().data
+        q = sb.table("credit_cards").select(
+            "id,name,limit_amount,closing_day,due_day,is_active"
+        ).eq("household_id", HOUSEHOLD_ID)
+        if active_only:
+            q = q.eq("is_active", True)
+        try:
+            return q.order("name", desc=False).execute().data
+        except Exception:
+            return q.execute().data
     except Exception:
-        return q.execute().data
+        return []
 
 def fetch_card_limits():
     try:
@@ -144,9 +161,8 @@ def fetch_card_limits():
     except Exception:
         return []
 
-# ====== TRANSACTIONS: robustez máxima contra RLS/ORDER ======
+# ====== TRANSACTIONS: robustez máxima ======
 def _tx_select_base():
-    # Colunas explicitamente listadas para evitar RLS que bloqueia colunas “sensíveis”
     return sb.table("transactions").select(
         "id,household_id,occurred_at,due_date,type,amount,planned_amount,paid_amount,"
         "is_paid,paid_at,description,category_id,account_id,member_id,payment_method,"
@@ -154,52 +170,30 @@ def _tx_select_base():
     ).eq("household_id", HOUSEHOLD_ID)
 
 def fetch_tx(start: date, end: date):
-    """
-    Plano A: filtra por occurred_at no SQL e ordena por due_date.
-    Plano B: filtra por occurred_at no SQL e ordena por occurred_at.
-    Plano C: fetch simples (sem filtro) + filtro/ordem no Python (limit para segurança).
-    """
     base = _tx_select_base().gte("occurred_at", start.isoformat()).lte("occurred_at", end.isoformat())
-    # Plano A
     try:
         return base.order("due_date", desc=False).execute().data
     except Exception:
-        pass
-    # Plano B
-    try:
-        return base.order("occurred_at", desc=False).execute().data
-    except Exception:
-        pass
-    # Plano C — último recurso: sem filtro de data no banco
-    try:
-        raw = _tx_select_base().limit(5000).execute().data  # limite de segurança
-        if not raw:
-            return []
-        # filtra no Python
-        out = []
-        for r in raw:
-            od = _safe_to_date(r.get("occurred_at"))
-            if od and (start <= od <= end):
-                out.append(r)
-        # ordena por due_date (nulos por último) e depois occurred_at
-        def _key(r):
-            dd = _safe_to_date(r.get("due_date"))
-            od = _safe_to_date(r.get("occurred_at"))
-            return (dd is None, dd or date.min, od or date.min)
-        out.sort(key=_key)
-        return out
-    except Exception as e:
-        # Último fallback: retorna array vazio para não quebrar a página
-        return []
+        try:
+            return base.order("occurred_at", desc=False).execute().data
+        except Exception:
+            try:
+                raw = _tx_select_base().limit(5000).execute().data
+            except Exception:
+                return []
+            out = []
+            for r in (raw or []):
+                od = _safe_to_date(r.get("occurred_at"))
+                if od and (start <= od <= end):
+                    out.append(r)
+            def _key(r):
+                dd = _safe_to_date(r.get("due_date"))
+                od = _safe_to_date(r.get("occurred_at"))
+                return (dd is None, dd or date.min, od or date.min)
+            out.sort(key=_key)
+            return out
 
 def fetch_tx_due(start: date, end: date):
-    """
-    Fluxo previsto (due_date no range; se nulo, caiu pro occurred_at):
-    A) Tenta uma única query com OR (PostgREST).
-    B) Tenta duas queries separadas e concatena.
-    C) Fetch simples sem filtro e filtra/ordena no Python.
-    """
-    # A) OR
     try:
         q = _tx_select_base()
         expr = (
@@ -209,32 +203,28 @@ def fetch_tx_due(start: date, end: date):
         q = q.or_(expr).order("due_date", desc=False, nulls_first=True).order("occurred_at", desc=False)
         return q.execute().data
     except Exception:
-        pass
-    # B) Duas queries
-    try:
-        a = _tx_select_base().gte("due_date", start.isoformat()).lte("due_date", end.isoformat()).execute().data
-    except Exception:
-        a = []
-    try:
-        b = _tx_select_base().is_("due_date", "null").gte("occurred_at", start.isoformat()).lte("occurred_at", end.isoformat()).execute().data
-    except Exception:
-        b = []
-    if a or b:
-        out = (a or []) + (b or [])
-        # ordena (nulos de due_date primeiro, depois occurred_at)
-        def _key(r):
-            dd = _safe_to_date(r.get("due_date"))
-            od = _safe_to_date(r.get("occurred_at"))
-            return (dd is not None, dd or date.min, od or date.min)
-        out.sort(key=_key)
-        return out
-    # C) Sem filtro no banco
-    try:
-        raw = _tx_select_base().limit(5000).execute().data
-        if not raw:
+        try:
+            a = _tx_select_base().gte("due_date", start.isoformat()).lte("due_date", end.isoformat()).execute().data
+        except Exception:
+            a = []
+        try:
+            b = _tx_select_base().is_("due_date", "null").gte("occurred_at", start.isoformat()).lte("occurred_at", end.isoformat()).execute().data
+        except Exception:
+            b = []
+        if a or b:
+            out = (a or []) + (b or [])
+            def _key(r):
+                dd = _safe_to_date(r.get("due_date"))
+                od = _safe_to_date(r.get("occurred_at"))
+                return (dd is not None, dd or date.min, od or date.min)
+            out.sort(key=_key)
+            return out
+        try:
+            raw = _tx_select_base().limit(5000).execute().data
+        except Exception:
             return []
         out = []
-        for r in raw:
+        for r in (raw or []):
             dd = _safe_to_date(r.get("due_date"))
             od = _safe_to_date(r.get("occurred_at"))
             eff = dd or od
@@ -246,8 +236,6 @@ def fetch_tx_due(start: date, end: date):
             return (dd is not None, dd or date.min, od or date.min)
         out.sort(key=_key2)
         return out
-    except Exception:
-        return []
 
 # ====== sidebar menu ======
 with st.sidebar:
@@ -257,7 +245,7 @@ with st.sidebar:
     if st.button("🔄 Recarregar dados"):
         st.cache_data.clear(); st.rerun()
 
-st.title("Finanças Familiares — v7.2")
+st.title("Finanças Familiares — v7.3")
 
 # ====== Entrada ======
 if section == "🏠 Entrada":
@@ -326,7 +314,7 @@ if section == "💼 Financeiro":
                 try:
                     cat_id = (cat_map.get(cat) or {}).get("id")
                     acc_id = (acc_map.get(acc) or {}).get("id")
-                    card_id = (card_map.get(card_name) or {}).get("id") if method=="card" and card_name!="—" else None
+                    card_id = (card_map.get(card_name) or {}).get("id") if (method=="card" and card_name!="—") else None
 
                     if tipo=="expense" and parcelado:
                         sb.rpc("create_installments", {
@@ -369,7 +357,6 @@ if section == "💼 Financeiro":
             st.info("Sem lançamentos.")
         else:
             df = pd.DataFrame(tx)
-            # datas seguras
             df["Data"] = df["occurred_at"].apply(lambda x: _safe_to_date(x).strftime("%d/%m/%Y") if _safe_to_date(x) else "")
             df["Venc"] = df["due_date"].apply(lambda x: _safe_to_date(x).strftime("%d/%m/%Y") if _safe_to_date(x) else "")
             df["Tipo"] = df["type"].map({"income":"Receita","expense":"Despesa"})
@@ -379,7 +366,6 @@ if section == "💼 Financeiro":
             df_show = df[["Data","Venc","Tipo","description","Previsto","Pago?","Pago (R$)","attachment_url","id"]]
             st.dataframe(df_show.rename(columns={"description":"Descrição","attachment_url":"Boleto"}), use_container_width=True, hide_index=True)
 
-            # marcar pagamento
             st.markdown("### Marcar pagamento")
             tx_id = st.selectbox("Transação", df["id"])
             pago_val = st.number_input("Valor pago (R$)", min_value=0.0, step=10.0)
@@ -391,7 +377,6 @@ if section == "💼 Financeiro":
                 except Exception as e:
                     st.error(f"Falha ao marcar pago: {e}")
 
-            # anexo de boleto
             st.markdown("### Anexar boleto")
             tx_id2 = st.selectbox("Transação (anexo)", df["id"], key="att_tx")
             up = st.file_uploader("Arquivo (PDF/IMG)", type=["pdf","png","jpg","jpeg"], key="att_file")
@@ -399,8 +384,7 @@ if section == "💼 Financeiro":
                 try:
                     fname = f"{uuid.uuid4().hex}_{up.name}"
                     content = up.read()
-                    # Produção: usar Supabase Storage; aqui deixamos um placeholder:
-                    url = f"uploaded:{fname}"
+                    url = f"uploaded:{fname}"  # em produção, use Supabase Storage
                     sb.table("transactions").update({"attachment_url": url}).eq("id", tx_id2).execute()
                     st.toast("Anexo salvo!", icon="📎"); st.cache_data.clear(); st.rerun()
                 except Exception as e:
@@ -430,9 +414,8 @@ if section == "💼 Financeiro":
                 try:
                     cat_id = (cat_map.get(cat) or {}).get("id")
                     acc_id = (acc_map.get(acc) or {}).get("id")
-                    card_id = (card_map.get(card_name) or {}).get("id") if method=="card" and card_name!="—" else None
+                    card_id = (card_map.get(card_name) or {}).get("id") if (method=="card" and card_name!="—") else None
 
-                    # cria do mês inicial
                     sb.table("transactions").insert({
                         "household_id": HOUSEHOLD_ID, "member_id": MY_MEMBER_ID,
                         "account_id": acc_id, "category_id": cat_id,
@@ -447,7 +430,6 @@ if section == "💼 Financeiro":
                         "created_by": user.id
                     }).execute()
 
-                    # copia para próximos meses
                     d = start_due
                     for _ in range(int(meses)):
                         d = (d + timedelta(days=32)).replace(day=min(start_due.day, 28))
@@ -526,7 +508,6 @@ if section == "💼 Financeiro":
 if section == "🧰 Administração":
     tabs = st.tabs(["Membros","Contas","Categorias","Cartões"])
 
-    # Membros
     with tabs[0]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("Membros")
@@ -545,7 +526,6 @@ if section == "🧰 Administração":
             st.markdown(chips, unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # Contas
     with tabs[1]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("Contas")
@@ -565,7 +545,6 @@ if section == "🧰 Administração":
             st.write(("✅ " if a["is_active"] else "❌ ") + a["name"])
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # Categorias
     with tabs[2]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("Categorias")
@@ -587,7 +566,6 @@ if section == "🧰 Administração":
             st.markdown("**Despesas**"); st.markdown(chips_exp or "_(vazio)_", unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # Cartões (somente aqui)
     with tabs[3]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("Cartões")
@@ -612,13 +590,13 @@ if section == "🧰 Administração":
         cards = fetch_cards(False)
         limits = fetch_card_limits(); limap = {x.get("id"): x for x in (limits or [])}
         if not cards:
-            st.info("Nenhum cartão cadastrado.")
+            st.info("Nenhum cartão cadastrado (ou acesso bloqueado).")
         else:
             for c in cards:
                 colA,colB,colC,colD = st.columns([4,2,2,2])
                 with colA: st.write(f"💳 **{c.get('name','(sem nome)')}** · Fechamento {c.get('closing_day')}/ Venc {c.get('due_day')}")
                 with colB: st.write(f"Limite: {to_brl(c.get('limit_amount'))}")
-                with colC: st.write("Disponível: " + to_brl(limap.get(c["id"],{}).get("available_limit", c.get("limit_amount",0))))
+                with colC: st.write("Disponível: " + to_brl(limap.get(c.get('id'),{}).get("available_limit", c.get("limit_amount",0))))
                 with colD:
                     if c.get("is_active"):
                         if st.button("Desativar", key=f"card_d_{c['id']}"):
