@@ -1,6 +1,6 @@
-from __future__ import annotations
-import streamlit as st
+# supabase_client.py
 from supabase import create_client, Client
+import streamlit as st
 
 @st.cache_resource(show_spinner=False)
 def get_supabase() -> Client:
