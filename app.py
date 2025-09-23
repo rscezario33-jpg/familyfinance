@@ -1,4 +1,4 @@
-# app.py — v7.1
+# app.py — v7.2
 from __future__ import annotations
 from datetime import date, datetime, timedelta
 import uuid
@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 from supabase_client import get_supabase
 
-st.set_page_config(page_title="Finanças Familiares — v7.1", layout="wide")
+st.set_page_config(page_title="Finanças Familiares — v7.2", layout="wide")
 
 # ====== estilo ======
 st.markdown("""
@@ -89,7 +89,6 @@ def bootstrap(user_id: str):
     except Exception:
         pass
     res = sb.rpc("create_household_and_member", {"display_name": "Você"}).execute().data
-    # Espera formato: [{"household_id": "...", "member_id": "..."}]
     item = res[0] if isinstance(res, list) and res else res
     return {"household_id": item["household_id"], "member_id": item["member_id"]}
 
@@ -100,6 +99,12 @@ HOUSEHOLD_ID = ids["household_id"]; MY_MEMBER_ID = ids["member_id"]
 def to_brl(v: float | int | None) -> str:
     v = v or 0
     return f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+def _safe_to_date(s) -> date | None:
+    try:
+        return pd.to_datetime(s).date() if s else None
+    except Exception:
+        return None
 
 def fetch_members():
     q = sb.table("members").select("id,display_name,role").eq("household_id", HOUSEHOLD_ID)
@@ -134,48 +139,115 @@ def fetch_cards(active_only=True):
         return q.execute().data
 
 def fetch_card_limits():
-    # View opcional com available_limit; se não existir, retorna vazio
     try:
         return sb.table("v_card_limit").select("id,available_limit").eq("household_id", HOUSEHOLD_ID).execute().data
     except Exception:
         return []
 
+# ====== TRANSACTIONS: robustez máxima contra RLS/ORDER ======
+def _tx_select_base():
+    # Colunas explicitamente listadas para evitar RLS que bloqueia colunas “sensíveis”
+    return sb.table("transactions").select(
+        "id,household_id,occurred_at,due_date,type,amount,planned_amount,paid_amount,"
+        "is_paid,paid_at,description,category_id,account_id,member_id,payment_method,"
+        "card_id,installment_group_id,installment_no,installment_total,attachment_url,created_by"
+    ).eq("household_id", HOUSEHOLD_ID)
+
 def fetch_tx(start: date, end: date):
-    # Filtro simples por occurred_at; ordena por due_date quando possível
-    base = sb.table("transactions").select(
-        "id,occurred_at,due_date,type,amount,planned_amount,paid_amount,is_paid,paid_at,description,category_id,account_id,member_id,payment_method,card_id,installment_group_id,installment_no,installment_total,attachment_url"
-    ).eq("household_id", HOUSEHOLD_ID).gte("occurred_at", start.isoformat()).lte("occurred_at", end.isoformat())
+    """
+    Plano A: filtra por occurred_at no SQL e ordena por due_date.
+    Plano B: filtra por occurred_at no SQL e ordena por occurred_at.
+    Plano C: fetch simples (sem filtro) + filtro/ordem no Python (limit para segurança).
+    """
+    base = _tx_select_base().gte("occurred_at", start.isoformat()).lte("occurred_at", end.isoformat())
+    # Plano A
     try:
         return base.order("due_date", desc=False).execute().data
     except Exception:
-        # fallback
-        try:
-            return base.order("occurred_at", desc=False).execute().data
-        except Exception:
-            return base.execute().data
+        pass
+    # Plano B
+    try:
+        return base.order("occurred_at", desc=False).execute().data
+    except Exception:
+        pass
+    # Plano C — último recurso: sem filtro de data no banco
+    try:
+        raw = _tx_select_base().limit(5000).execute().data  # limite de segurança
+        if not raw:
+            return []
+        # filtra no Python
+        out = []
+        for r in raw:
+            od = _safe_to_date(r.get("occurred_at"))
+            if od and (start <= od <= end):
+                out.append(r)
+        # ordena por due_date (nulos por último) e depois occurred_at
+        def _key(r):
+            dd = _safe_to_date(r.get("due_date"))
+            od = _safe_to_date(r.get("occurred_at"))
+            return (dd is None, dd or date.min, od or date.min)
+        out.sort(key=_key)
+        return out
+    except Exception as e:
+        # Último fallback: retorna array vazio para não quebrar a página
+        return []
 
 def fetch_tx_due(start: date, end: date):
     """
-    Fluxo de caixa previsto: considerar due_date dentro do range
-    e, se due_date for nulo, usar occurred_at — sem usar funções SQL em filtros.
-    Implementado via OR do PostgREST.
+    Fluxo previsto (due_date no range; se nulo, caiu pro occurred_at):
+    A) Tenta uma única query com OR (PostgREST).
+    B) Tenta duas queries separadas e concatena.
+    C) Fetch simples sem filtro e filtra/ordena no Python.
     """
-    q = sb.table("transactions").select(
-        "id,occurred_at,due_date,type,amount,planned_amount,paid_amount,is_paid,description,category_id,account_id,member_id"
-    ).eq("household_id", HOUSEHOLD_ID)
-    expr = (
-        f"and(due_date.gte.{start.isoformat()},due_date.lte.{end.isoformat()}),"
-        f"and(due_date.is.null,occurred_at.gte.{start.isoformat()},occurred_at.lte.{end.isoformat()})"
-    )
-    q = q.or_(expr)
-    # Ordena por due_date (nulos primeiro) e depois por occurred_at
+    # A) OR
     try:
-        return q.order("due_date", desc=False, nulls_first=True).order("occurred_at", desc=False).execute().data
+        q = _tx_select_base()
+        expr = (
+            f"and(due_date.gte.{start.isoformat()},due_date.lte.{end.isoformat()}),"
+            f"and(due_date.is.null,occurred_at.gte.{start.isoformat()},occurred_at.lte.{end.isoformat()})"
+        )
+        q = q.or_(expr).order("due_date", desc=False, nulls_first=True).order("occurred_at", desc=False)
+        return q.execute().data
     except Exception:
-        try:
-            return q.order("occurred_at", desc=False).execute().data
-        except Exception:
-            return q.execute().data
+        pass
+    # B) Duas queries
+    try:
+        a = _tx_select_base().gte("due_date", start.isoformat()).lte("due_date", end.isoformat()).execute().data
+    except Exception:
+        a = []
+    try:
+        b = _tx_select_base().is_("due_date", "null").gte("occurred_at", start.isoformat()).lte("occurred_at", end.isoformat()).execute().data
+    except Exception:
+        b = []
+    if a or b:
+        out = (a or []) + (b or [])
+        # ordena (nulos de due_date primeiro, depois occurred_at)
+        def _key(r):
+            dd = _safe_to_date(r.get("due_date"))
+            od = _safe_to_date(r.get("occurred_at"))
+            return (dd is not None, dd or date.min, od or date.min)
+        out.sort(key=_key)
+        return out
+    # C) Sem filtro no banco
+    try:
+        raw = _tx_select_base().limit(5000).execute().data
+        if not raw:
+            return []
+        out = []
+        for r in raw:
+            dd = _safe_to_date(r.get("due_date"))
+            od = _safe_to_date(r.get("occurred_at"))
+            eff = dd or od
+            if eff and (start <= eff <= end):
+                out.append(r)
+        def _key2(r):
+            dd = _safe_to_date(r.get("due_date"))
+            od = _safe_to_date(r.get("occurred_at"))
+            return (dd is not None, dd or date.min, od or date.min)
+        out.sort(key=_key2)
+        return out
+    except Exception:
+        return []
 
 # ====== sidebar menu ======
 with st.sidebar:
@@ -185,7 +257,7 @@ with st.sidebar:
     if st.button("🔄 Recarregar dados"):
         st.cache_data.clear(); st.rerun()
 
-st.title("Finanças Familiares — v7.1")
+st.title("Finanças Familiares — v7.2")
 
 # ====== Entrada ======
 if section == "🏠 Entrada":
@@ -227,7 +299,7 @@ if section == "🏠 Entrada":
 if section == "💼 Financeiro":
     st.tabs(["Lançamentos","Movimentações","Receitas/Despesas fixas","Orçamentos","Fluxo de caixa"])
 
-    # ————— Lançamentos (rápido + parcelados + cartão) —————
+    # ————— Lançamentos —————
     with st.expander("➕ Lançar (rápido / parcelado / cartão)", True):
         cats = fetch_categories(); cat_map = {c["name"]: c for c in (cats or [])}
         accs = fetch_accounts(True); acc_map = {a["name"]: a for a in (accs or [])}
@@ -288,7 +360,7 @@ if section == "💼 Financeiro":
                 except Exception as e:
                     st.error(f"Falha: {e}")
 
-    # ————— Movimentações (marcar pago + anexo) —————
+    # ————— Movimentações —————
     with st.expander("📋 Movimentações"):
         ini = st.date_input("Início", value=date.today().replace(day=1), key="mv_ini")
         fim = st.date_input("Fim", value=date.today(), key="mv_fim")
@@ -297,8 +369,9 @@ if section == "💼 Financeiro":
             st.info("Sem lançamentos.")
         else:
             df = pd.DataFrame(tx)
-            df["Data"] = pd.to_datetime(df["occurred_at"]).dt.strftime("%d/%m/%Y")
-            df["Venc"] = pd.to_datetime(df["due_date"]).dt.strftime("%d/%m/%Y")
+            # datas seguras
+            df["Data"] = df["occurred_at"].apply(lambda x: _safe_to_date(x).strftime("%d/%m/%Y") if _safe_to_date(x) else "")
+            df["Venc"] = df["due_date"].apply(lambda x: _safe_to_date(x).strftime("%d/%m/%Y") if _safe_to_date(x) else "")
             df["Tipo"] = df["type"].map({"income":"Receita","expense":"Despesa"})
             df["Previsto"] = df["planned_amount"].fillna(df["amount"]).fillna(0.0)
             df["Pago?"] = df["is_paid"].fillna(False)
@@ -326,7 +399,7 @@ if section == "💼 Financeiro":
                 try:
                     fname = f"{uuid.uuid4().hex}_{up.name}"
                     content = up.read()
-                    # Exemplo simples: URL simbólica. Em produção, use Storage.
+                    # Produção: usar Supabase Storage; aqui deixamos um placeholder:
                     url = f"uploaded:{fname}"
                     sb.table("transactions").update({"attachment_url": url}).eq("id", tx_id2).execute()
                     st.toast("Anexo salvo!", icon="📎"); st.cache_data.clear(); st.rerun()
@@ -440,7 +513,8 @@ if section == "💼 Financeiro":
                 v = r.get("paid_amount") if r.get("is_paid") else (r.get("planned_amount") or r.get("amount") or 0)
                 return v if r["type"]=="income" else -v
             df["eff"] = df.apply(eff, axis=1)
-            df["Quando"] = pd.to_datetime(df["due_date"].fillna(df["occurred_at"])).dt.date
+            df["Quando"] = df.apply(lambda r: (_safe_to_date(r.get("due_date")) or _safe_to_date(r.get("occurred_at"))), axis=1)
+            df = df[df["Quando"].notna()]
             tot = df.groupby("Quando", as_index=False)["eff"].sum()
             st.line_chart(tot, x="Quando", y="eff")
             cta = df[df["type"]=="income"]["eff"].sum()
@@ -513,7 +587,7 @@ if section == "🧰 Administração":
             st.markdown("**Despesas**"); st.markdown(chips_exp or "_(vazio)_", unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # Cartões (agora exclusivamente aqui)
+    # Cartões (somente aqui)
     with tabs[3]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("Cartões")
