@@ -1,4 +1,4 @@
-# app.py — v7.1 (ajustes de ordem e gestão de cartões na Administração)
+# app.py — v7.2 (sem order() problemáticos + cartões só em Administração com criação)
 from __future__ import annotations
 from datetime import date, datetime, timedelta
 import io
@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 from supabase_client import get_supabase
 
-st.set_page_config(page_title="Finanças Familiares — v7.1", layout="wide")
+st.set_page_config(page_title="Finanças Familiares — v7.2", layout="wide")
 
 # ====== Estilo ======
 st.markdown("""
@@ -75,7 +75,8 @@ HOUSEHOLD_ID = ids["household_id"]; MY_MEMBER_ID = ids["member_id"]
 
 # ====== Helpers ======
 def to_brl(v: float) -> str:
-    return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    try: return f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception: return "R$ 0,00"
 
 def _to_date_safe(s):
     if not s: return None
@@ -97,39 +98,42 @@ def fetch_accounts(active_only=False):
         .eq("household_id", HOUSEHOLD_ID)
     if active_only: q = q.eq("is_active", True)
     data = q.execute().data or []
-    data.sort(key=lambda a: a.get("name","").lower())
+    data.sort(key=lambda a: (a.get("name") or "").lower())
     return data
 
 def fetch_cards(active_only=True):
+    # Nunca usar .order('name') aqui — ordeno no Python
     q = sb.table("credit_cards").select("id,household_id,name,limit_amount,closing_day,due_day,is_active,created_by") \
         .eq("household_id", HOUSEHOLD_ID)
     if active_only: q = q.eq("is_active", True)
     data = q.execute().data or []
-    data.sort(key=lambda c: c.get("name","").lower())  # ordenação no Python (evita APIError)
+    data.sort(key=lambda c: (c.get("name") or "").lower())
     return data
 
 def fetch_card_limits():
     data = sb.table("v_card_limit").select("*").eq("household_id", HOUSEHOLD_ID).execute().data or []
-    data.sort(key=lambda c: c.get("name","").lower())
+    data.sort(key=lambda c: (c.get("name") or "").lower())
     return data
 
 def fetch_tx(start: date, end: date):
     cols = ("id,occurred_at,due_date,type,amount,planned_amount,paid_amount,is_paid,paid_at,"
             "description,category_id,account_id,member_id,payment_method,card_id,"
             "installment_group_id,installment_no,installment_total,attachment_url")
+    # Nada de order("due_date") no servidor
     data = sb.table("transactions").select(cols) \
         .eq("household_id", HOUSEHOLD_ID) \
         .gte("occurred_at", start.isoformat()) \
         .lte("occurred_at", end.isoformat()) \
         .order("occurred_at", desc=False) \
         .execute().data or []
-    # ordena por due_date se existir; senão occurred_at
+    # Ordeno no Python por due_date (fallback occurred_at)
     data.sort(key=lambda t: (_to_date_safe(t.get("due_date")) or _to_date_safe(t.get("occurred_at")) or date.min))
     return data
 
 def fetch_tx_due(start: date, end: date):
     """
-    Fluxo de caixa previsto: 2 queries (due_date no range) + (due_date IS NULL e occurred_at no range)
+    Fluxo de caixa previsto: 2 queries (due_date no range) + (due_date IS NULL e occurred_at no range),
+    merge e ordenação em Python.
     """
     cols = ("id,occurred_at,due_date,type,amount,planned_amount,paid_amount,is_paid,paid_at,"
             "description,category_id,account_id,member_id,payment_method,card_id,"
@@ -154,7 +158,7 @@ with st.sidebar:
     st.markdown("---")
     if st.button("🔄 Recarregar dados"): st.cache_data.clear(); st.rerun()
 
-st.title("Finanças Familiares — v7.1")
+st.title("Finanças Familiares — v7.2")
 
 # ====== ENTRADA ======
 if section == "🏠 Entrada":
@@ -290,9 +294,9 @@ if section == "💼 Financeiro":
             up = st.file_uploader("Arquivo (PDF/IMG)", type=["pdf","png","jpg","jpeg"], key="att_file")
             if up and st.button("📎 Enviar anexo"):
                 try:
-                    # Placeholder simples (troque por Supabase Storage se quiser)
+                    # Placeholder (troque por Supabase Storage se quiser)
                     fname = f"{uuid.uuid4().hex}_{up.name}"
-                    _ = up.read()  # conteúdo ignorado no placeholder
+                    _ = up.read()
                     url = f"uploaded:{fname}"
                     sb.table("transactions").update({"attachment_url": url}).eq("id", tx_id2).execute()
                     st.toast("Anexo salvo!", icon="📎"); st.cache_data.clear(); st.rerun()
@@ -334,7 +338,7 @@ if section == "💼 Financeiro":
                         "account_id": acc_id, "category_id": cat_id,
                         "type": tipo,
                         "amount": previsto,           # amount = previsto (baseline)
-                        "planned_amount": previsto,   # chave para previsto vs. pago
+                        "planned_amount": previsto,   # chave previsto vs. pago
                         "occurred_at": start_due.isoformat(),
                         "due_date": start_due.isoformat(),
                         "description": desc,
@@ -346,13 +350,12 @@ if section == "💼 Financeiro":
                     # próximos meses
                     d = start_due
                     for _ in range(int(meses)):
-                        # avança mês preservando "dia"
-                        next_month = (d.replace(day=1) + timedelta(days=32)).replace(day=1)
+                        # avança mês preservando "dia" (com fallback p/ último dia)
+                        first_next = (d.replace(day=1) + timedelta(days=32)).replace(day=1)
                         try:
-                            d = next_month.replace(day=start_due.day)
+                            d = first_next.replace(day=start_due.day)
                         except ValueError:
-                            # se dia não existir (ex.: 31), cai no último dia do mês
-                            last = (next_month + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+                            last = (first_next + timedelta(days=32)).replace(day=1) - timedelta(days=1)
                             d = last
                         sb.table("transactions").insert({
                             "household_id": HOUSEHOLD_ID, "member_id": MY_MEMBER_ID,
