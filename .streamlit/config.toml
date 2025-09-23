@@ -1,1 +1,12 @@
+[server]
+headless = true
+runOnSave = false
+
+[theme]
+base="light"
+primaryColor="#0ea5e9"    # azul
+backgroundColor="#ffffff"
+secondaryBackgroundColor="#f5f7fb"
+textColor="#0b2038"
+font="sans serif"
 
