@@ -1,4 +1,4 @@
-# app.py — v8.0
+# app.py — v8.1
 from __future__ import annotations
 from datetime import date, datetime, timedelta
 import uuid
@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 from supabase_client import get_supabase
 
-st.set_page_config(page_title="Finanças Familiares — v8.0", layout="wide")
+st.set_page_config(page_title="Finanças Familiares — v8.1", layout="wide")
 
 # ============== ESTILO ==============
 st.markdown("""
@@ -66,7 +66,7 @@ with st.sidebar:
 if not st.session_state.auth_ok: st.stop()
 user = _user(); assert user, "Usuário não autenticado."
 
-# ============== BOOTSTRAP: household & membro ==============
+# ============== BOOTSTRAP ==============
 @st.cache_data(show_spinner=False)
 def bootstrap(user_id: str):
     try: sb.rpc("accept_pending_invite").execute()
@@ -91,7 +91,6 @@ def _safe_to_date(s) -> date | None:
     except Exception: return None
 
 def _select_month(label: str, key: str):
-    # seletor de competência (mês/ano)
     today = date.today()
     default = st.session_state.get(key) or date(today.year, today.month, 1)
     colm, coly = st.columns([1,1])
@@ -101,7 +100,6 @@ def _select_month(label: str, key: str):
         y = st.number_input("Ano", min_value=2000, max_value=today.year+5, value=default.year, key=f"{key}_y")
     comp = date(int(y), int(m), 1)
     st.session_state[key] = comp
-    # retorna primeiro e último do mês
     next_month = (comp + timedelta(days=32)).replace(day=1)
     last = next_month - timedelta(days=1)
     return comp, last
@@ -109,7 +107,7 @@ def _select_month(label: str, key: str):
 def _drop_none_keys(d: dict) -> dict:
     return {k:v for k,v in d.items() if v is not None}
 
-# ============== FETCHES base (com tolerância a RLS) ==============
+# ============== FETCHES (tolerantes) ==============
 def fetch_members():
     q = sb.table("members").select("id,display_name,role").eq("household_id", HOUSEHOLD_ID)
     try: return q.order("display_name", desc=False).execute().data
@@ -145,7 +143,6 @@ def fetch_card_limits():
     except Exception: return []
 
 def _tx_base():
-    # evita colunas problemáticas; card_id pode não existir
     cols = ("id,household_id,occurred_at,due_date,type,amount,planned_amount,paid_amount,"
             "is_paid,paid_at,description,category_id,account_id,member_id,payment_method,"
             "installment_group_id,installment_no,installment_total,attachment_url,created_by")
@@ -200,12 +197,8 @@ def fetch_tx_due(start: date, end: date):
             return (dd is not None, dd or date.min, od or date.min)
         out.sort(key=_key2); return out
 
-# ============== INSERÇÕES/UPDATES com tolerância a card_id ausente ==============
+# ============== INSERÇÃO resiliente (card_id opcional) ==============
 def insert_transaction_safely(payload: dict):
-    """
-    Tenta com card_id (se presente). Se o PostgREST reclamar de coluna inexistente (PGRST204),
-    remove 'card_id' e reenvia.
-    """
     data = _drop_none_keys(payload.copy())
     try:
         sb.table("transactions").insert(data).execute()
@@ -228,17 +221,15 @@ with st.sidebar:
     st.markdown("---")
     if st.button("🔄 Recarregar dados"): st.cache_data.clear(); st.rerun()
 
-st.title("Finanças Familiares — v8.0")
+st.title("Finanças Familiares — v8.1")
 
 # ============== ENTRADA (com competência) ==============
 if section == "🏠 Entrada":
     comp_ini, comp_fim = _select_month("Competência", "home_comp")
     txm = fetch_tx(comp_ini, comp_fim)
-    res = sum([
-        ((t.get("paid_amount") if t.get("is_paid") else (t.get("planned_amount") or t.get("amount") or 0.0)))
-        * (1 if t["type"] == "income" else -1)
-        for t in (txm or [])
-    ])
+    res = sum([((t.get("paid_amount") if t.get("is_paid")
+                else (t.get("planned_amount") or t.get("amount") or 0.0)))
+                * (1 if t["type"]=="income" else -1) for t in (txm or [])])
     c1,c2,c3 = st.columns(3)
     with c1: st.metric("Período", f"{comp_ini.strftime('%d/%m')}—{comp_fim.strftime('%d/%m')}")
     with c2: st.metric("Lançamentos", len(txm or []))
@@ -264,14 +255,14 @@ if section == "🏠 Entrada":
         st.session_state.financeiro_tab = "Lançamentos"
         st.rerun()
 
-# ============== FINANCEIRO (AGORA EM ABAS REAIS) ==============
+# ============== FINANCEIRO (controle segmentado em vez de st.tabs) ==============
 if section == "💼 Financeiro":
     tab_names = ["Lançamentos","Movimentações","Receitas/Despesas fixas","Orçamentos","Fluxo de caixa"]
-    default_idx = tab_names.index(st.session_state.get("financeiro_tab","Lançamentos"))
-    t1, t2, t3, t4, t5 = st.tabs(tab_names, index=default_idx)
+    # controle “abas” com radio horizontal — permite selecionar via session_state
+    sel = st.radio(" ", tab_names, key="financeiro_tab", horizontal=True, label_visibility="collapsed")
 
     # ---------- Lançamentos ----------
-    with t1:
+    if sel == "Lançamentos":
         st.subheader("➕ Lançar (rápido / parcelado / cartão)")
         comp_ini, comp_fim = _select_month("Competência padrão para datas", "fin_comp_lanc")
         cats = fetch_categories(); cat_map = {c["name"]: c for c in (cats or [])}
@@ -315,11 +306,10 @@ if section == "💼 Financeiro":
                             "p_card_id": card_id
                         }).execute()
                     else:
-                        planned = float(val)
                         ok2, err = insert_transaction_safely({
                             "household_id": HOUSEHOLD_ID, "member_id": MY_MEMBER_ID,
                             "account_id": acc_id, "category_id": cat_id,
-                            "type": tipo, "amount": float(val), "planned_amount": planned,
+                            "type": tipo, "amount": float(val), "planned_amount": float(val),
                             "occurred_at": data.isoformat(), "due_date": due.isoformat(),
                             "description": desc, "payment_method": method, "card_id": card_id,
                             "created_by": user.id
@@ -330,7 +320,7 @@ if section == "💼 Financeiro":
                     st.error(f"Falha: {e}")
 
     # ---------- Movimentações ----------
-    with t2:
+    if sel == "Movimentações":
         st.subheader("📋 Movimentações")
         comp_ini, comp_fim = _select_month("Competência para listar", "fin_comp_mov")
         tx = fetch_tx(comp_ini, comp_fim)
@@ -347,7 +337,6 @@ if section == "💼 Financeiro":
             df_show = df[["Data","Venc","Tipo","description","Previsto","Pago?","Pago (R$)","attachment_url","id"]]
             st.dataframe(df_show.rename(columns={"description":"Descrição","attachment_url":"Boleto"}),
                          use_container_width=True, hide_index=True)
-            # Exportar
             csv = df_show.to_csv(index=False).encode("utf-8-sig")
             st.download_button("⬇️ Baixar CSV da competência", data=csv, file_name=f"movimentacoes_{comp_ini:%Y-%m}.csv")
 
@@ -368,14 +357,14 @@ if section == "💼 Financeiro":
             if up and st.button("📎 Enviar anexo"):
                 try:
                     fname = f"{uuid.uuid4().hex}_{up.name}"
-                    url = f"uploaded:{fname}"  # produção: Supabase Storage
+                    url = f"uploaded:{fname}"
                     sb.table("transactions").update({"attachment_url": url}).eq("id", tx_id2).execute()
                     st.toast("Anexo salvo!", icon="📎"); st.cache_data.clear(); st.rerun()
                 except Exception as e:
                     st.error(f"Falha no anexo: {e}")
 
     # ---------- Fixas ----------
-    with t3:
+    if sel == "Receitas/Despesas fixas":
         st.subheader("♻️ Receitas/Despesas fixas")
         cats = fetch_categories(); cat_map = {c["name"]: c for c in (cats or [])}
         accs = fetch_accounts(True); acc_map = {a["name"]: a for a in (accs or [])}
@@ -430,7 +419,7 @@ if section == "💼 Financeiro":
         st.caption("Ao marcar pagamento em Movimentações: se não informar 'Valor pago', usamos o previsto; a data padrão é hoje.")
 
     # ---------- Orçamentos ----------
-    with t4:
+    if sel == "Orçamentos":
         st.subheader("💡 Orçamentos")
         month_str = st.text_input("Mês (YYYY-MM)", value=date.today().strftime("%Y-%m"))
         cats = fetch_categories(); cat_by_name = {c["name"]: c for c in (cats or [])}
@@ -462,7 +451,7 @@ if section == "💼 Financeiro":
             st.dataframe(dfba[["Categoria","Tipo","Orçado","Realizado","% usado"]], use_container_width=True, hide_index=True)
 
     # ---------- Fluxo de caixa ----------
-    with t5:
+    if sel == "Fluxo de caixa":
         st.subheader("📈 Fluxo de caixa (previsto)")
         f1,f2 = st.columns(2)
         default_ini = date.today().replace(day=1)
@@ -485,10 +474,11 @@ if section == "💼 Financeiro":
             with c1: st.metric("Receitas previstas", to_brl(df[df["type"]=="income"]["eff"].sum()))
             with c2: st.metric("Despesas previstas", to_brl(-df[df["type"]=="expense"]["eff"].sum()))
 
-# ============== ADMINISTRAÇÃO (inclui convites e contas com edição/transferência) ==============
+# ============== ADMINISTRAÇÃO ==============
 if section == "🧰 Administração":
     tabs = st.tabs(["Membros","Contas","Categorias","Cartões"])
-    # ---------- Membros ----------
+
+    # Membros
     with tabs[0]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("Membros")
@@ -509,7 +499,6 @@ if section == "🧰 Administração":
                 try:
                     sb.rpc("invite_member", {"p_household": HOUSEHOLD_ID, "p_email": inv_email, "p_role": inv_role}).execute()
                 except Exception:
-                    # Fallback: inserir em 'invites' se existir
                     sb.table("invites").insert({
                         "household_id": HOUSEHOLD_ID,
                         "invited_email": inv_email,
@@ -527,11 +516,10 @@ if section == "🧰 Administração":
             st.markdown(chips, unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # ---------- Contas ----------
+    # Contas
     with tabs[1]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("Contas")
-        # criar/editar
         accs_all = fetch_accounts(False) or []
         acc_names = [a["name"] for a in accs_all]
         edit_mode = st.checkbox("Editar conta existente")
@@ -539,8 +527,9 @@ if section == "🧰 Administração":
             sel = st.selectbox("Conta", acc_names)
             sel_acc = next((a for a in accs_all if a["name"]==sel), None) or {}
             new_name = st.text_input("Nome", value=sel_acc.get("name",""))
+            current_pt = PT_TYPES.get(sel_acc.get("type"), list(PT_TYPES.values())[0])
             new_type_pt = st.selectbox("Tipo", list(PT_TYPES.values()),
-                                       index=list(PT_TYPES.values()).index(PT_TYPES.get(sel_acc.get("type"),"Conta corrente")))
+                                       index=list(PT_TYPES.values()).index(current_pt))
             new_active = st.checkbox("Ativa?", value=bool(sel_acc.get("is_active", True)))
             if st.button("💾 Salvar alterações"):
                 try:
@@ -587,7 +576,6 @@ if section == "🧰 Administração":
                 if not a_or or not a_de or a_or==a_de:
                     raise RuntimeError("Selecione contas válidas e diferentes.")
                 group = uuid.uuid4().hex
-                # saída da origem
                 okA, eA = insert_transaction_safely({
                     "household_id": HOUSEHOLD_ID,"member_id": MY_MEMBER_ID,
                     "account_id": a_or, "category_id": None, "type":"expense",
@@ -595,7 +583,6 @@ if section == "🧰 Administração":
                     "occurred_at": data_t.isoformat(), "due_date": data_t.isoformat(),
                     "description": f"{desc_t} [{group}]","payment_method":"account","created_by": user.id
                 })
-                # entrada no destino
                 okB, eB = insert_transaction_safely({
                     "household_id": HOUSEHOLD_ID,"member_id": MY_MEMBER_ID,
                     "account_id": a_de, "category_id": None, "type":"income",
@@ -618,7 +605,7 @@ if section == "🧰 Administração":
                          use_container_width=True, hide_index=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # ---------- Categorias ----------
+    # Categorias
     with tabs[2]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("Categorias")
@@ -637,7 +624,7 @@ if section == "🧰 Administração":
             st.markdown("**Despesas**"); st.markdown(chips_exp or "_(vazio)_", unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # ---------- Cartões (somente aqui) ----------
+    # Cartões
     with tabs[3]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("Cartões")
