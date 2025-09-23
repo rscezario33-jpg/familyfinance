@@ -1,4 +1,4 @@
-# app.py — Family Finance v8 (Visual custom + Sidebar com logos)
+# app.py — Family Finance v8.0.1 (use_container_width fix)
 from __future__ import annotations
 from datetime import date, datetime, timedelta
 import uuid
@@ -55,7 +55,7 @@ def _user():
     return sess.user if sess and sess.user else None
 
 with st.sidebar:
-    st.image("assets/logo_family_finance.png", use_column_width=True)
+    st.image("assets/logo_family_finance.png", use_container_width=True)
     st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
 
     if "auth_ok" not in st.session_state: st.session_state.auth_ok = False
@@ -63,7 +63,7 @@ with st.sidebar:
         st.markdown('<div class="sidebar-title">Acesso</div>', unsafe_allow_html=True)
         email = st.text_input("Email")
         pwd   = st.text_input("Senha", type="password")
-        c1,c2 = st.columns(2)
+        c1, c2 = st.columns(2)
         with c1:
             if st.button("Entrar"):
                 try: _signin(email,pwd); st.session_state.auth_ok = True; st.rerun()
@@ -91,7 +91,7 @@ with st.sidebar:
         _signout(); st.session_state.auth_ok = False; st.rerun()
 
     st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
-    st.image("assets/logo_automaGO.png", use_column_width=True)
+    st.image("assets/logo_automaGO.png", use_container_width=True)
 
 user = _user(); assert user
 
