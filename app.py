@@ -1,4 +1,4 @@
-# app.py — v8.1
+# app.py — v8.2
 from __future__ import annotations
 from datetime import date, datetime, timedelta
 import uuid
@@ -6,7 +6,7 @@ import pandas as pd
 import streamlit as st
 from supabase_client import get_supabase
 
-st.set_page_config(page_title="Finanças Familiares — v8.1", layout="wide")
+st.set_page_config(page_title="Finanças Familiares — v8.2", layout="wide")
 
 # ============== ESTILO ==============
 st.markdown("""
@@ -107,6 +107,59 @@ def _select_month(label: str, key: str):
 def _drop_none_keys(d: dict) -> dict:
     return {k:v for k,v in d.items() if v is not None}
 
+# ============== DETECÇÃO DE COLUNAS EM TRANSACTIONS ==============
+@st.cache_data(show_spinner=False)
+def detect_tx_columns(household_id: str):
+    """
+    Tenta selecionar com todas as colunas opcionais; se o PostgREST reclamar
+    de alguma (PGRST204), removemos e tentamos novamente, até funcionar.
+    Retorna a lista final de colunas existentes e flags úteis.
+    """
+    base = [
+        "id","household_id","occurred_at","type","amount","planned_amount",
+        "paid_amount","is_paid","description","category_id","account_id",
+        "member_id","created_by"
+    ]
+    optional = [
+        "due_date","paid_at","payment_method","card_id",
+        "installment_group_id","installment_no","installment_total","attachment_url"
+    ]
+    cols = base + optional
+    tried = set()
+    while True:
+        try:
+            sb.table("transactions").select(",".join(cols)).eq("household_id", household_id).limit(1).execute()
+            break
+        except Exception as e:
+            msg = str(e)
+            missing = None
+            for name in optional:
+                if name in tried:  # já removemos antes
+                    continue
+                if f"'{name}'" in msg:  # mensagem tipo: Could not find the 'due_date' column...
+                    missing = name
+                    tried.add(name)
+                    break
+            if missing:
+                cols = [c for c in cols if c != missing]
+                continue
+            # se não identificamos qual é, recua para só as bases
+            cols = base
+            try:
+                sb.table("transactions").select(",".join(cols)).eq("household_id", household_id).limit(1).execute()
+            except Exception:
+                pass
+            break
+    flags = {
+        "has_due_date": "due_date" in cols,
+        "has_card_id": "card_id" in cols,
+        "has_payment_method": "payment_method" in cols,
+        "has_attachment_url": "attachment_url" in cols,
+    }
+    return cols, flags
+
+TX_COLS, TX_FLAGS = detect_tx_columns(HOUSEHOLD_ID)
+
 # ============== FETCHES (tolerantes) ==============
 def fetch_members():
     q = sb.table("members").select("id,display_name,role").eq("household_id", HOUSEHOLD_ID)
@@ -143,16 +196,31 @@ def fetch_card_limits():
     except Exception: return []
 
 def _tx_base():
-    cols = ("id,household_id,occurred_at,due_date,type,amount,planned_amount,paid_amount,"
-            "is_paid,paid_at,description,category_id,account_id,member_id,payment_method,"
-            "installment_group_id,installment_no,installment_total,attachment_url,created_by")
-    return sb.table("transactions").select(cols).eq("household_id", HOUSEHOLD_ID)
+    return sb.table("transactions").select(",".join(TX_COLS)).eq("household_id", HOUSEHOLD_ID)
 
 def fetch_tx(start: date, end: date):
     base = _tx_base().gte("occurred_at", start.isoformat()).lte("occurred_at", end.isoformat())
-    try: return base.order("due_date", desc=False).execute().data
+    # Se due_date existir, tentamos ordenar por ela; senão, por occurred_at
+    if TX_FLAGS["has_due_date"]:
+        try: return base.order("due_date", desc=False).execute().data
+        except Exception: pass
+    try: return base.order("occurred_at", desc=False).execute().data
     except Exception:
-        try: return base.order("occurred_at", desc=False).execute().data
+        try: raw = _tx_base().limit(5000).execute().data
+        except Exception: return []
+        out = []
+        for r in (raw or []):
+            od = _safe_to_date(r.get("occurred_at"))
+            if od and (start <= od <= end): out.append(r)
+        out.sort(key=lambda r: _safe_to_date(r.get("occurred_at")) or date.min)
+        return out
+
+def fetch_tx_due(start: date, end: date):
+    # Se NÃO existe due_date, o fluxo previsto usa apenas occurred_at
+    if not TX_FLAGS["has_due_date"]:
+        try:
+            return _tx_base().gte("occurred_at", start.isoformat()).lte("occurred_at", end.isoformat()) \
+                             .order("occurred_at", desc=False).execute().data
         except Exception:
             try: raw = _tx_base().limit(5000).execute().data
             except Exception: return []
@@ -160,13 +228,10 @@ def fetch_tx(start: date, end: date):
             for r in (raw or []):
                 od = _safe_to_date(r.get("occurred_at"))
                 if od and (start <= od <= end): out.append(r)
-            def _key(r):
-                dd = _safe_to_date(r.get("due_date"))
-                od = _safe_to_date(r.get("occurred_at"))
-                return (dd is None, dd or date.min, od or date.min)
-            out.sort(key=_key); return out
+            out.sort(key=lambda r: _safe_to_date(r.get("occurred_at")) or date.min)
+            return out
 
-def fetch_tx_due(start: date, end: date):
+    # Com due_date: OR (due no range) OR (sem due usa occurred_at)
     try:
         q = _tx_base()
         expr = (f"and(due_date.gte.{start.isoformat()},due_date.lte.{end.isoformat()}),"
@@ -197,22 +262,28 @@ def fetch_tx_due(start: date, end: date):
             return (dd is not None, dd or date.min, od or date.min)
         out.sort(key=_key2); return out
 
-# ============== INSERÇÃO resiliente (card_id opcional) ==============
+# ============== INSERÇÃO resiliente (remove colunas ausentes) ==============
 def insert_transaction_safely(payload: dict):
     data = _drop_none_keys(payload.copy())
+    # Remover automaticamente campos que não existem
+    if not TX_FLAGS["has_due_date"]: data.pop("due_date", None)
+    if not TX_FLAGS["has_card_id"]: data.pop("card_id", None)
+    if not TX_FLAGS["has_payment_method"]: data.pop("payment_method", None)
+    if not TX_FLAGS["has_attachment_url"]: data.pop("attachment_url", None)
     try:
         sb.table("transactions").insert(data).execute()
         return True, None
     except Exception as e:
+        # fallback adicional: se ainda assim uma coluna acusar, retiramos e tentamos 1x
         msg = str(e)
-        if "PGRST204" in msg or "Could not find the 'card_id'" in msg:
-            data.pop("card_id", None)
-            try:
-                sb.table("transactions").insert(data).execute()
-                return True, None
-            except Exception as e2:
-                return False, str(e2)
-        return False, msg
+        for key in list(data.keys()):
+            if f"'{key}'" in msg and key not in ["household_id","member_id","type","amount","occurred_at","account_id","category_id","created_by"]:
+                data.pop(key, None)
+        try:
+            sb.table("transactions").insert(data).execute()
+            return True, None
+        except Exception as e2:
+            return False, str(e2)
 
 # ============== SIDEBAR / NAV ==============
 with st.sidebar:
@@ -221,7 +292,7 @@ with st.sidebar:
     st.markdown("---")
     if st.button("🔄 Recarregar dados"): st.cache_data.clear(); st.rerun()
 
-st.title("Finanças Familiares — v8.1")
+st.title("Finanças Familiares — v8.2")
 
 # ============== ENTRADA (com competência) ==============
 if section == "🏠 Entrada":
@@ -255,16 +326,15 @@ if section == "🏠 Entrada":
         st.session_state.financeiro_tab = "Lançamentos"
         st.rerun()
 
-# ============== FINANCEIRO (controle segmentado em vez de st.tabs) ==============
+# ============== FINANCEIRO (radio como abas) ==============
 if section == "💼 Financeiro":
     tab_names = ["Lançamentos","Movimentações","Receitas/Despesas fixas","Orçamentos","Fluxo de caixa"]
-    # controle “abas” com radio horizontal — permite selecionar via session_state
     sel = st.radio(" ", tab_names, key="financeiro_tab", horizontal=True, label_visibility="collapsed")
 
     # ---------- Lançamentos ----------
     if sel == "Lançamentos":
         st.subheader("➕ Lançar (rápido / parcelado / cartão)")
-        comp_ini, comp_fim = _select_month("Competência padrão para datas", "fin_comp_lanc")
+        comp_ini, _ = _select_month("Competência padrão para datas", "fin_comp_lanc")
         cats = fetch_categories(); cat_map = {c["name"]: c for c in (cats or [])}
         accs = fetch_accounts(True); acc_map = {a["name"]: a for a in (accs or [])}
         cards = fetch_cards(True); card_map = {c["name"]: c for c in (cards or [])}
@@ -276,10 +346,16 @@ if section == "💼 Financeiro":
                 cat  = st.selectbox("Categoria", list(cat_map.keys()) or ["Mercado"])
                 desc = st.text_input("Descrição")
                 data = st.date_input("Data", value=comp_ini)
-                due  = st.date_input("Vencimento (opcional)", value=comp_ini)
+                # mostra "Vencimento" só se a coluna existir
+                if TX_FLAGS["has_due_date"]:
+                    due  = st.date_input("Vencimento (opcional)", value=comp_ini, key="due_lanc")
+                else:
+                    due = None
             with col2:
                 val  = st.number_input("Valor", min_value=0.0, step=10.0)
-                method = st.selectbox("Forma de pagamento", ["account","card"], index=0, format_func=lambda x: "Conta" if x=="account" else "Cartão")
+                pm_opts = ["account"] + (["card"] if fetch_cards(True) else [])
+                method = st.selectbox("Forma de pagamento", pm_opts, index=0,
+                                      format_func=lambda x: "Conta" if x=="account" else "Cartão")
                 acc = st.selectbox("Conta", list(acc_map.keys()) or ["Conta Corrente"])
                 card_name = st.selectbox("Cartão (se aplicável)", ["—"] + list(card_map.keys()))
                 parcelado = st.checkbox("Parcelado?")
@@ -290,9 +366,10 @@ if section == "💼 Financeiro":
                 try:
                     cat_id = (cat_map.get(cat) or {}).get("id")
                     acc_id = (acc_map.get(acc) or {}).get("id")
-                    card_id = (card_map.get(card_name) or {}).get("id") if (method=="card" and card_name!="—") else None
+                    card_id = (card_map.get(card_name) or {}).get("id") if ("card" in pm_opts and method=="card" and card_name!="—") else None
 
                     if tipo=="expense" and parcelado:
+                        # se sua RPC exigir due_date e a coluna não existir, ela deve ser ajustada no backend
                         sb.rpc("create_installments", {
                             "p_household": HOUSEHOLD_ID,
                             "p_member": MY_MEMBER_ID,
@@ -301,7 +378,7 @@ if section == "💼 Financeiro":
                             "p_desc": desc,
                             "p_total": float(val),
                             "p_n": int(n_parc),
-                            "p_first_due": due.isoformat(),
+                            "p_first_due": (due or data).isoformat(),
                             "p_payment_method": method,
                             "p_card_id": card_id
                         }).execute()
@@ -310,8 +387,11 @@ if section == "💼 Financeiro":
                             "household_id": HOUSEHOLD_ID, "member_id": MY_MEMBER_ID,
                             "account_id": acc_id, "category_id": cat_id,
                             "type": tipo, "amount": float(val), "planned_amount": float(val),
-                            "occurred_at": data.isoformat(), "due_date": due.isoformat(),
-                            "description": desc, "payment_method": method, "card_id": card_id,
+                            "occurred_at": data.isoformat(),
+                            "due_date": (due.isoformat() if due else None),
+                            "description": desc,
+                            "payment_method": method,
+                            "card_id": card_id,
                             "created_by": user.id
                         })
                         if not ok2: raise RuntimeError(err or "Falha na inserção")
@@ -329,15 +409,16 @@ if section == "💼 Financeiro":
         else:
             df = pd.DataFrame(tx)
             df["Data"] = df["occurred_at"].apply(lambda x: _safe_to_date(x).strftime("%d/%m/%Y") if _safe_to_date(x) else "")
-            df["Venc"] = df["due_date"].apply(lambda x: _safe_to_date(x).strftime("%d/%m/%Y") if _safe_to_date(x) else "")
+            if TX_FLAGS["has_due_date"]:
+                df["Venc"] = df["due_date"].apply(lambda x: _safe_to_date(x).strftime("%d/%m/%Y") if _safe_to_date(x) else "")
             df["Tipo"] = df["type"].map({"income":"Receita","expense":"Despesa"}).fillna(df["type"])
             df["Previsto"] = df["planned_amount"].fillna(df["amount"]).fillna(0.0)
             df["Pago?"] = df["is_paid"].fillna(False)
             df["Pago (R$)"] = df["paid_amount"].fillna("")
-            df_show = df[["Data","Venc","Tipo","description","Previsto","Pago?","Pago (R$)","attachment_url","id"]]
-            st.dataframe(df_show.rename(columns={"description":"Descrição","attachment_url":"Boleto"}),
+            cols = ["Data"] + (["Venc"] if TX_FLAGS["has_due_date"] else []) + ["Tipo","description","Previsto","Pago?","Pago (R$)","attachment_url","id"]
+            st.dataframe(df[cols].rename(columns={"description":"Descrição","attachment_url":"Boleto"}),
                          use_container_width=True, hide_index=True)
-            csv = df_show.to_csv(index=False).encode("utf-8-sig")
+            csv = df[cols].to_csv(index=False).encode("utf-8-sig")
             st.download_button("⬇️ Baixar CSV da competência", data=csv, file_name=f"movimentacoes_{comp_ini:%Y-%m}.csv")
 
             st.markdown("### Marcar pagamento")
@@ -358,8 +439,13 @@ if section == "💼 Financeiro":
                 try:
                     fname = f"{uuid.uuid4().hex}_{up.name}"
                     url = f"uploaded:{fname}"
-                    sb.table("transactions").update({"attachment_url": url}).eq("id", tx_id2).execute()
-                    st.toast("Anexo salvo!", icon="📎"); st.cache_data.clear(); st.rerun()
+                    # se não houver attachment_url, insert_transaction_safely tiraria; aqui fazemos update condicional
+                    field = "attachment_url" if TX_FLAGS["has_attachment_url"] else None
+                    if field:
+                        sb.table("transactions").update({field: url}).eq("id", tx_id2).execute()
+                        st.toast("Anexo salvo!", icon="📎"); st.cache_data.clear(); st.rerun()
+                    else:
+                        st.warning("Este banco não possui campo de anexo em transactions.")
                 except Exception as e:
                     st.error(f"Falha no anexo: {e}")
 
@@ -376,10 +462,11 @@ if section == "💼 Financeiro":
                 tipo = st.selectbox("Tipo", ["expense","income"], index=0, format_func=lambda x: {"income":"Receita","expense":"Despesa"}[x])
                 cat  = st.selectbox("Categoria", list(cat_map.keys()) or ["Energia","Salário"])
                 desc = st.text_input("Descrição (ex.: [FIXA] Energia)")
-                start_due = st.date_input("Vencimento inicial", value=date.today())
+                start_due = st.date_input("Data (e vencimento se existir)", value=date.today())
             with col2:
                 previsto = st.number_input("Valor previsto (R$)", min_value=0.0, step=10.0)
-                method = st.selectbox("Forma pagamento", ["account","card"], index=0, format_func=lambda x: "Conta" if x=="account" else "Cartão")
+                pm_opts = ["account"] + (["card"] if fetch_cards(True) else [])
+                method = st.selectbox("Forma pagamento", pm_opts, index=0, format_func=lambda x: "Conta" if x=="account" else "Cartão")
                 acc = st.selectbox("Conta", list(acc_map.keys()) or ["Conta Corrente"])
                 card_name = st.selectbox("Cartão (se aplicável)", ["—"] + list(card_map.keys()))
                 meses = st.number_input("Copiar para próximos (meses)", min_value=0, max_value=24, value=0)
@@ -388,13 +475,14 @@ if section == "💼 Financeiro":
                 try:
                     cat_id = (cat_map.get(cat) or {}).get("id")
                     acc_id = (acc_map.get(acc) or {}).get("id")
-                    card_id = (card_map.get(card_name) or {}).get("id") if (method=="card" and card_name!="—") else None
+                    card_id = (card_map.get(card_name) or {}).get("id") if ("card" in pm_opts and method=="card" and card_name!="—") else None
 
                     ok2, err = insert_transaction_safely({
                         "household_id": HOUSEHOLD_ID, "member_id": MY_MEMBER_ID,
                         "account_id": acc_id, "category_id": cat_id, "type": tipo,
                         "amount": float(previsto), "planned_amount": float(previsto),
-                        "occurred_at": start_due.isoformat(), "due_date": start_due.isoformat(),
+                        "occurred_at": start_due.isoformat(),
+                        "due_date": (start_due.isoformat() if TX_FLAGS["has_due_date"] else None),
                         "description": desc, "payment_method": method, "card_id": card_id,
                         "created_by": user.id
                     })
@@ -407,7 +495,8 @@ if section == "💼 Financeiro":
                             "household_id": HOUSEHOLD_ID, "member_id": MY_MEMBER_ID,
                             "account_id": acc_id, "category_id": cat_id, "type": tipo,
                             "amount": float(previsto), "planned_amount": float(previsto),
-                            "occurred_at": d.isoformat(), "due_date": d.isoformat(),
+                            "occurred_at": d.isoformat(),
+                            "due_date": (d.isoformat() if TX_FLAGS["has_due_date"] else None),
                             "description": desc, "payment_method": method, "card_id": card_id,
                             "created_by": user.id
                         })
@@ -466,7 +555,10 @@ if section == "💼 Financeiro":
                 v = r.get("paid_amount") if r.get("is_paid") else (r.get("planned_amount") or r.get("amount") or 0)
                 return v if r["type"]=="income" else -v
             df["eff"] = df.apply(eff, axis=1)
-            df["Quando"] = df.apply(lambda r: (_safe_to_date(r.get("due_date")) or _safe_to_date(r.get("occurred_at"))), axis=1)
+            if TX_FLAGS["has_due_date"]:
+                df["Quando"] = df.apply(lambda r: (_safe_to_date(r.get("due_date")) or _safe_to_date(r.get("occurred_at"))), axis=1)
+            else:
+                df["Quando"] = df["occurred_at"].apply(lambda x: _safe_to_date(x))
             df = df[df["Quando"].notna()]
             tot = df.groupby("Quando", as_index=False)["eff"].sum()
             st.line_chart(tot, x="Quando", y="eff")
@@ -474,10 +566,9 @@ if section == "💼 Financeiro":
             with c1: st.metric("Receitas previstas", to_brl(df[df["type"]=="income"]["eff"].sum()))
             with c2: st.metric("Despesas previstas", to_brl(-df[df["type"]=="expense"]["eff"].sum()))
 
-# ============== ADMINISTRAÇÃO ==============
+# ============== ADMINISTRAÇÃO (convites + contas com edição/transferência) ==============
 if section == "🧰 Administração":
     tabs = st.tabs(["Membros","Contas","Categorias","Cartões"])
-
     # Membros
     with tabs[0]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -506,7 +597,7 @@ if section == "🧰 Administração":
                         "status": "pending",
                         "invited_by": user.id
                     }).execute()
-                st.success("Convite enviado/registrado. O convidado deve aceitar pelo e-mail.")
+                st.success("Convite enviado/registrado.")
             except Exception as e:
                 st.error(f"Falha no convite: {e}")
 
@@ -580,14 +671,16 @@ if section == "🧰 Administração":
                     "household_id": HOUSEHOLD_ID,"member_id": MY_MEMBER_ID,
                     "account_id": a_or, "category_id": None, "type":"expense",
                     "amount": float(valor), "planned_amount": float(valor),
-                    "occurred_at": data_t.isoformat(), "due_date": data_t.isoformat(),
+                    "occurred_at": data_t.isoformat(),
+                    "due_date": (data_t.isoformat() if TX_FLAGS["has_due_date"] else None),
                     "description": f"{desc_t} [{group}]","payment_method":"account","created_by": user.id
                 })
                 okB, eB = insert_transaction_safely({
                     "household_id": HOUSEHOLD_ID,"member_id": MY_MEMBER_ID,
                     "account_id": a_de, "category_id": None, "type":"income",
                     "amount": float(valor), "planned_amount": float(valor),
-                    "occurred_at": data_t.isoformat(), "due_date": data_t.isoformat(),
+                    "occurred_at": data_t.isoformat(),
+                    "due_date": (data_t.isoformat() if TX_FLAGS["has_due_date"] else None),
                     "description": f"{desc_t} [{group}]","payment_method":"account","created_by": user.id
                 })
                 if not (okA and okB): raise RuntimeError(eA or eB or "Falha na transferência")
@@ -690,4 +783,4 @@ if section == "📊 Dashboards":
             st.markdown("#### Por categoria"); st.bar_chart(df.groupby("Categoria", as_index=False)["valor_eff"].sum(), x="Categoria", y="valor_eff")
         st.markdown('</div>', unsafe_allow_html=True)
     with tabs[1]:
-        st.info("Use também 💼 Financeiro › Fluxo de caixa (previsto) para ver o futuro por vencimento.")
+        st.info("Use também 💼 Financeiro › Fluxo de caixa (previsto) para ver o futuro por vencimento/ocorrência.")
