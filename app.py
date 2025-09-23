@@ -1,4 +1,4 @@
-# app.py — v7.3 (robust: filtros feitos em Python; cartões só em Administração; criação de cartões)
+# app.py — Family Finance v8 (Visual custom + Sidebar com logos)
 from __future__ import annotations
 from datetime import date, datetime, timedelta
 import uuid
@@ -6,62 +6,98 @@ import pandas as pd
 import streamlit as st
 from supabase_client import get_supabase
 
-st.set_page_config(page_title="Finanças Familiares — v7.3", layout="wide")
+st.set_page_config(page_title="Family Finance", layout="wide")
 
-# ====== Estilo ======
+# =========================
+# CSS (visual Family Finance + sidebar navy "modelo 3")
+# =========================
 st.markdown("""
 <style>
-.main .block-container { max-width: 1200px; padding-top: .5rem; }
+/* Sidebar fundo azul escuro */
+section[data-testid="stSidebar"] > div {
+  background: #0b2038 !important;
+  color: #f0f6ff !important;
+  padding-top: 14px;
+}
+section[data-testid="stSidebar"] img {
+  display:block; margin: 6px auto 14px auto;
+}
+.sidebar-title { color:#a7c3ff; font-weight:700; letter-spacing:.6px; text-transform:uppercase; font-size:.80rem; margin: 6px 0 6px 6px; }
+.sidebar-group { border-top:1px solid rgba(255,255,255,.08); margin:10px 0 8px 0; padding-top:8px; }
+.stButton>button, .stDownloadButton>button {
+  border-radius:10px; padding:.55rem .9rem; font-weight:600; border:1px solid #0ea5e9; background:#0ea5e9; color:white;
+}
+.stButton>button:hover { transform: translateY(-1px); background:#0284c7; border-color:#0284c7; }
+.stSelectbox div[data-baseweb="select"] > div, .stTextInput input, .stNumberInput input, .stDateInput input {
+  border-radius:10px !important;
+}
 .card { background: linear-gradient(180deg,#fff 0%,#f8fafc 100%);
   border:1px solid #e2e8f0; border-radius:16px; padding:16px 18px;
   box-shadow:0 6px 20px rgba(0,0,0,.06); margin-bottom:12px; }
-.stTextInput input, .stNumberInput input, .stDateInput input { border-radius:10px !important; }
-.stSelectbox div[data-baseweb="select"] > div { border-radius:10px !important; }
-.stButton>button { border-radius:10px; padding:.6rem 1rem; font-weight:600;
-  border:1px solid #0ea5e9; transition:.15s; }
-.stButton>button:hover { transform: translateY(-1px); }
 .badge { display:inline-flex; align-items:center; gap:.5rem; background:#eef6ff; color:#0369a1;
   border:1px solid #bfdbfe; padding:.35rem .6rem; border-radius:999px; font-weight:600; margin:4px 6px 0 0; }
 .badge.red{background:#fff1f2;color:#9f1239;border-color:#fecdd3;}
 .badge.green{background:#ecfdf5;color:#065f46;border-color:#bbf7d0;}
+.small { font-size:.85rem; opacity:.75; }
 </style>
 """, unsafe_allow_html=True)
 
 sb = get_supabase()
 
-# ====== Auth ======
-def _signin(email: str, password: str): sb.auth.sign_in_with_password({"email": email, "password": password})
-def _signup(email: str, password: str): sb.auth.sign_up({"email": email, "password": password})
+# =========================
+# Auth
+# =========================
+def _signin(email, password): sb.auth.sign_in_with_password({"email": email, "password": password})
+def _signup(email, password): sb.auth.sign_up({"email": email, "password": password})
 def _signout(): sb.auth.sign_out()
 def _user():
     sess = sb.auth.get_session()
     return sess.user if sess and sess.user else None
 
 with st.sidebar:
-    st.header("🔐 Login")
+    st.image("assets/logo_family_finance.png", use_column_width=True)
+    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
+
     if "auth_ok" not in st.session_state: st.session_state.auth_ok = False
     if not st.session_state.auth_ok:
+        st.markdown('<div class="sidebar-title">Acesso</div>', unsafe_allow_html=True)
         email = st.text_input("Email")
         pwd   = st.text_input("Senha", type="password")
-        c1, c2 = st.columns(2)
+        c1,c2 = st.columns(2)
         with c1:
             if st.button("Entrar"):
                 try: _signin(email,pwd); st.session_state.auth_ok = True; st.rerun()
                 except Exception as e: st.error(str(e))
         with c2:
             if st.button("Criar conta"):
-                try: _signup(email,pwd); st.success("Conta criada. Faça login.")
+                try: _signup(email,pwd); st.success("Conta criada. Confirme o e-mail e faça login.")
                 except Exception as e: st.error(str(e))
+        st.stop()
     else:
         u = _user()
-        if u: st.caption(f"Logado: {u.email}")
-        if st.button("Sair"):
-            _signout(); st.session_state.auth_ok = False; st.rerun()
+        st.caption(f"Logado: {u.email if u else ''}")
 
-if not st.session_state.auth_ok: st.stop()
+    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-title">Menu</div>', unsafe_allow_html=True)
+
+    section = st.radio(
+        "", ["🏠 Entrada","💼 Financeiro","🧰 Administração","📊 Dashboards"],
+        label_visibility="collapsed",
+        index=0
+    )
+
+    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
+    if st.button("Sair"):
+        _signout(); st.session_state.auth_ok = False; st.rerun()
+
+    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
+    st.image("assets/logo_automaGO.png", use_column_width=True)
+
 user = _user(); assert user
 
-# ====== Bootstrap (aceita convites + cria família/membro) ======
+# =========================
+# Bootstrap household/member
+# =========================
 @st.cache_data(show_spinner=False)
 def bootstrap(user_id: str):
     try: sb.rpc("accept_pending_invite").execute()
@@ -72,79 +108,82 @@ def bootstrap(user_id: str):
 ids = bootstrap(user.id)
 HOUSEHOLD_ID = ids["household_id"]; MY_MEMBER_ID = ids["member_id"]
 
-# ====== Helpers ======
+# =========================
+# Helpers
+# =========================
 def to_brl(v: float) -> str:
     try: return f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except Exception: return "R$ 0,00"
 
 def _to_date_safe(s):
     if not s: return None
-    s = str(s)
-    for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
-        try: return datetime.strptime(s[:len(fmt)], fmt).date()
-        except Exception: pass
-    try: return datetime.fromisoformat(s).date()
-    except Exception: return None
+    try: return datetime.fromisoformat(str(s)).date()
+    except Exception:
+        for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S"):
+            try: return datetime.strptime(str(s)[:len(fmt)], fmt).date()
+            except Exception: pass
+    return None
+
+def _safe_table(name: str):
+    try: return sb.table(name).select("*").eq("household_id", HOUSEHOLD_ID).execute().data or []
+    except Exception: return []
 
 def fetch_members():
-    return sb.table("members").select("id,display_name,role") \
-        .eq("household_id", HOUSEHOLD_ID).order("display_name").execute().data
-
-def fetch_categories():
-    return sb.table("categories").select("id,name,kind") \
-        .eq("household_id", HOUSEHOLD_ID).order("name").execute().data
-
-def fetch_accounts(active_only=False):
-    q = sb.table("accounts").select("id,name,is_active,type") \
-        .eq("household_id", HOUSEHOLD_ID)
-    if active_only: q = q.eq("is_active", True)
-    data = q.execute().data or []
-    data.sort(key=lambda a: (a.get("name") or "").lower())
-    return data
-
-def fetch_cards(active_only=True):
-    # Ordeno no Python; evito .order() no PostgREST
-    q = sb.table("credit_cards").select("id,household_id,name,limit_amount,closing_day,due_day,is_active,created_by") \
-        .eq("household_id", HOUSEHOLD_ID)
-    if active_only: q = q.eq("is_active", True)
-    data = q.execute().data or []
-    data.sort(key=lambda c: (c.get("name") or "").lower())
-    return data
-
-def fetch_card_limits():
-    data = sb.table("v_card_limit").select("*").eq("household_id", HOUSEHOLD_ID).execute().data or []
-    data.sort(key=lambda c: (c.get("name") or "").lower())
-    return data
-
-def _safe_table(table: str):
-    """Select * com proteção de erro (retorna lista vazia se der APIError)."""
     try:
-        return sb.table(table).select("*").eq("household_id", HOUSEHOLD_ID).execute().data or []
+        return sb.table("members").select("id,display_name,role") \
+            .eq("household_id", HOUSEHOLD_ID).order("display_name").execute().data
     except Exception:
         return []
 
+def fetch_categories():
+    try:
+        return sb.table("categories").select("id,name,kind") \
+            .eq("household_id", HOUSEHOLD_ID).order("name").execute().data
+    except Exception:
+        return []
+
+def fetch_accounts(active_only=False):
+    q = sb.table("accounts").select("id,name,is_active,type").eq("household_id", HOUSEHOLD_ID)
+    if active_only: q = q.eq("is_active", True)
+    try:
+        data = q.execute().data or []
+    except Exception:
+        data = _safe_table("accounts")
+    data.sort(key=lambda a:(a.get("name") or "").lower())
+    return data
+
+def fetch_cards(active_only=True):
+    q = sb.table("credit_cards").select("id,household_id,name,limit_amount,closing_day,due_day,is_active,created_by") \
+        .eq("household_id", HOUSEHOLD_ID)
+    if active_only: q = q.eq("is_active", True)
+    try:
+        data = q.execute().data or []
+    except Exception:
+        data = _safe_table("credit_cards")
+    data.sort(key=lambda c:(c.get("name") or "").lower())
+    return data
+
+def fetch_card_limits():
+    try:
+        data = sb.table("v_card_limit").select("*").eq("household_id", HOUSEHOLD_ID).execute().data or []
+    except Exception:
+        data = []
+    data.sort(key=lambda c:(c.get("name") or "").lower())
+    return data
+
 def fetch_tx(start: date, end: date):
-    """
-    Robusto: pega *todas* as transações da household e filtra em Python por occurred_at no intervalo.
-    Evita APIError por colunas/filtros/ordenações no PostgREST.
-    """
     rows = _safe_table("transactions")
-    out = []
+    out=[]
     for t in rows:
         d = _to_date_safe(t.get("occurred_at"))
         if d and start <= d <= end:
             out.append(t)
-    # ordenar por due_date; fallback occurred_at
     out.sort(key=lambda t: (_to_date_safe(t.get("due_date")) or _to_date_safe(t.get("occurred_at")) or date.min))
     return out
 
 def fetch_tx_due(start: date, end: date):
-    """
-    Fluxo de caixa previsto: considera due_date no range; se due_date ausente, usa occurred_at.
-    Tudo filtrado em Python.
-    """
     rows = _safe_table("transactions")
-    out = []
+    out=[]
     for t in rows:
         dd = _to_date_safe(t.get("due_date"))
         od = _to_date_safe(t.get("occurred_at"))
@@ -154,16 +193,11 @@ def fetch_tx_due(start: date, end: date):
     out.sort(key=lambda t: (_to_date_safe(t.get("due_date")) or _to_date_safe(t.get("occurred_at")) or date.min))
     return out
 
-# ====== Sidebar — Navegação ======
-with st.sidebar:
-    st.header("📍 Navegação")
-    section = st.radio("Área", ["🏠 Entrada","💼 Financeiro","🧰 Administração","📊 Dashboards"], index=0)
-    st.markdown("---")
-    if st.button("🔄 Recarregar dados"): st.cache_data.clear(); st.rerun()
+# =========================
+# ENTRADA
+# =========================
+st.title("Family Finance")
 
-st.title("Finanças Familiares — v7.3")
-
-# ====== ENTRADA ======
 if section == "🏠 Entrada":
     first_day = date.today().replace(day=1)
     txm = fetch_tx(first_day, date.today())
@@ -182,22 +216,18 @@ if section == "🏠 Entrada":
         df["valor_eff"] = df.apply(lambda r: (r.get("paid_amount") if r.get("is_paid") else r.get("planned_amount") or r.get("amount") or 0)
                                              * (1 if r.get("type")=="income" else -1), axis=1)
         df["Membro"] = df["member_id"].map(mem_map).fillna("—")
-        s = df.groupby("Membro")["valor_eff"].sum().reset_index()
-        st.bar_chart(s, x="Membro", y="valor_eff")
+        st.bar_chart(df.groupby("Membro")["valor_eff"].sum().reset_index(), x="Membro", y="valor_eff")
     else:
         st.info("Sem lançamentos no mês.")
     st.markdown('</div>', unsafe_allow_html=True)
 
-    if st.button("⚡ Lançar agora"):
-        st.session_state.section = "💼 Financeiro"
-        st.session_state.sub = "Lançamentos"
-        st.rerun()
-
-# ====== FINANCEIRO ======
+# =========================
+# FINANCEIRO
+# =========================
 if section == "💼 Financeiro":
     tabs = st.tabs(["Lançamentos","Movimentações","Receitas/Despesas fixas","Orçamentos","Fluxo de caixa"])
 
-    # --- Lançamentos (rápido / parcelado / cartão) ---
+    # Lançamentos
     with tabs[0]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("➕ Lançar")
@@ -220,8 +250,8 @@ if section == "💼 Financeiro":
                 card_name = st.selectbox("Cartão (se aplicável)", ["—"] + list(card_map.keys()))
                 parcelado = st.checkbox("Parcelado?")
                 n_parc = st.number_input("Nº parcelas", min_value=2, max_value=36, value=2, disabled=not parcelado)
-
             ok = st.form_submit_button("Lançar")
+
             if ok:
                 try:
                     cat_id = (cat_map.get(cat) or {}).get("id")
@@ -261,15 +291,14 @@ if section == "💼 Financeiro":
                     st.error(f"Falha: {e}")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # --- Movimentações (pagar + anexo) ---
+    # Movimentações (pagamento + anexo)
     with tabs[1]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("📋 Movimentações")
         ini = st.date_input("Início", value=date.today().replace(day=1), key="mv_ini")
         fim = st.date_input("Fim", value=date.today(), key="mv_fim")
         tx = fetch_tx(ini, fim)
-        if not tx:
-            st.info("Sem lançamentos.")
+        if not tx: st.info("Sem lançamentos.")
         else:
             df = pd.DataFrame(tx)
             df["Data"] = pd.to_datetime(df.get("occurred_at"), errors="coerce").dt.strftime("%d/%m/%Y")
@@ -278,36 +307,23 @@ if section == "💼 Financeiro":
             df["Previsto"] = df.get("planned_amount").fillna(df.get("amount")).fillna(0.0)
             df["Pago?"] = df.get("is_paid").fillna(False)
             df["Pago (R$)"] = df.get("paid_amount").fillna("")
-            df_show = df[["Data","Venc","Tipo","description","Previsto","Pago?","Pago (R$)","attachment_url","id"]]
-            st.dataframe(df_show.rename(columns={"description":"Descrição","attachment_url":"Boleto"}), use_container_width=True, hide_index=True)
+            st.dataframe(df[["Data","Venc","Tipo","description","Previsto","Pago?","Pago (R$)","attachment_url","id"]]
+                        .rename(columns={"description":"Descrição","attachment_url":"Boleto"}),
+                        use_container_width=True, hide_index=True)
 
             st.markdown("### Marcar pagamento")
-            tx_id = st.selectbox("Transação", df["id"])
-            pago_val = st.number_input("Valor pago (R$)", min_value=0.0, step=10.0)
-            pago_dt  = st.date_input("Data pagamento", value=date.today())
+            tx_id  = st.selectbox("Transação", df["id"])
+            pago_v = st.number_input("Valor pago (R$)", min_value=0.0, step=10.0)
+            pago_d = st.date_input("Data pagamento", value=date.today())
             if st.button("✅ Confirmar pagamento"):
                 try:
-                    sb.rpc("mark_transaction_paid", {"p_tx_id": tx_id, "p_amount": pago_val, "p_date": pago_dt.isoformat()}).execute()
+                    sb.rpc("mark_transaction_paid", {"p_tx_id": tx_id, "p_amount": pago_v, "p_date": pago_d.isoformat()}).execute()
                     st.toast("Pagamento registrado!", icon="✅"); st.cache_data.clear(); st.rerun()
                 except Exception as e:
                     st.error(f"Falha ao marcar pago: {e}")
-
-            st.markdown("### Anexar boleto")
-            tx_id2 = st.selectbox("Transação (anexo)", df["id"], key="att_tx")
-            up = st.file_uploader("Arquivo (PDF/IMG)", type=["pdf","png","jpg","jpeg"], key="att_file")
-            if up and st.button("📎 Enviar anexo"):
-                try:
-                    # Placeholder (troque por Supabase Storage se quiser)
-                    fname = f"{uuid.uuid4().hex}_{up.name}"
-                    _ = up.read()
-                    url = f"uploaded:{fname}"
-                    sb.table("transactions").update({"attachment_url": url}).eq("id", tx_id2).execute()
-                    st.toast("Anexo salvo!", icon="📎"); st.cache_data.clear(); st.rerun()
-                except Exception as e:
-                    st.error(f"Falha no anexo: {e}")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # --- Fixas (previstas + cópia p/ próximos meses) ---
+    # Fixas (previsto/pago + cópia para meses)
     with tabs[2]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("♻️ Receitas/Despesas fixas")
@@ -340,8 +356,8 @@ if section == "💼 Financeiro":
                         "household_id": HOUSEHOLD_ID, "member_id": MY_MEMBER_ID,
                         "account_id": acc_id, "category_id": cat_id,
                         "type": tipo,
-                        "amount": previsto,           # amount = previsto (baseline)
-                        "planned_amount": previsto,   # chave previsto vs. pago
+                        "amount": previsto,
+                        "planned_amount": previsto,
                         "occurred_at": start_due.isoformat(),
                         "due_date": start_due.isoformat(),
                         "description": desc,
@@ -353,7 +369,6 @@ if section == "💼 Financeiro":
                     # próximos meses
                     d = start_due
                     for _ in range(int(meses)):
-                        # avança mês preservando "dia" (com fallback p/ último dia)
                         first_next = (d.replace(day=1) + timedelta(days=32)).replace(day=1)
                         try:
                             d = first_next.replace(day=start_due.day)
@@ -376,10 +391,10 @@ if section == "💼 Financeiro":
                     st.toast("✅ Fixas criadas!", icon="✅"); st.cache_data.clear(); st.rerun()
                 except Exception as e:
                     st.error(f"Falha: {e}")
-        st.caption("Ao marcar o pagamento em Movimentações: se não informar 'Valor pago', usamos o previsto; 'Data de pagamento' padrão é hoje.")
+        st.caption("Pagamentos são confirmados na tela **Movimentações**. Se não informar 'Valor pago', vale o previsto.")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # --- Orçamentos ---
+    # Orçamentos
     with tabs[3]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("💡 Orçamentos")
@@ -395,21 +410,9 @@ if section == "💼 Financeiro":
                 st.toast("✅ Salvo!", icon="✅")
             except Exception as e:
                 st.error(f"Falha: {e}")
-        st.markdown("### Comparativo do mês")
-        try:
-            res = sb.rpc("budget_vs_actual", {"p_household": HOUSEHOLD_ID, "p_month": month_str}).execute().data
-        except Exception as e:
-            res = []; st.error(f"Falha: {e}")
-        dfba = pd.DataFrame(res) if res else pd.DataFrame()
-        if dfba.empty: st.info("Sem dados.")
-        else:
-            dfba["Tipo"] = dfba["kind"].map({"income":"Receita","expense":"Despesa"})
-            dfba["Categoria"] = dfba["category_name"]
-            dfba["Orçado"] = dfba["budget"].fillna(0); dfba["Realizado"] = dfba["actual"].fillna(0)
-            st.dataframe(dfba[["Categoria","Tipo","Orçado","Realizado"]], use_container_width=True, hide_index=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # --- Fluxo de caixa (previsto) ---
+    # Fluxo previsto
     with tabs[4]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("📈 Fluxo de caixa (previsto)")
@@ -423,18 +426,14 @@ if section == "💼 Financeiro":
             def eff(r):
                 v = r.get("paid_amount") if r.get("is_paid") else (r.get("planned_amount") or r.get("amount") or 0)
                 return v if r.get("type")=="income" else -v
-            df["eff"] = df.apply(eff, axis=1)
             df["Quando"] = pd.to_datetime(df.get("due_date").fillna(df.get("occurred_at")), errors="coerce").dt.date
-            tot = df.groupby("Quando")["eff"].sum().reset_index()
-            st.line_chart(tot, x="Quando", y="eff")
-            cta = df[df.get("type")=="income"]["eff"].sum()
-            ctd = -df[df.get("type")=="expense"]["eff"].sum()
-            c1,c2 = st.columns(2)
-            with c1: st.metric("Receitas previstas", to_brl(cta))
-            with c2: st.metric("Despesas previstas", to_brl(ctd))
+            df["Saldo"] = df.apply(eff, axis=1)
+            st.line_chart(df.groupby("Quando")["Saldo"].sum().reset_index(), x="Quando", y="Saldo")
         st.markdown('</div>', unsafe_allow_html=True)
 
-# ====== ADMINISTRAÇÃO ======
+# =========================
+# ADMINISTRAÇÃO (cartões só aqui)
+# =========================
 if section == "🧰 Administração":
     tabs = st.tabs(["Membros","Contas","Categorias","Cartões"])
 
@@ -472,21 +471,17 @@ if section == "🧰 Administração":
                 st.toast("✅ Conta salva!", icon="✅"); st.cache_data.clear(); st.rerun()
             except Exception as e: st.error(str(e))
         accs = fetch_accounts(False)
-        if not accs: st.info("Nenhuma conta cadastrada.")
-        else:
-            for a in accs:
-                colA,colB,colC = st.columns([6,3,3])
-                with colA: st.write(("✅ " if a["is_active"] else "❌ ") + a["name"])
-                with colB: st.write(f"Tipo: `{a.get('type','')}`")
-                with colC:
-                    if a["is_active"]:
-                        if st.button("Desativar", key=f"acc_d_{a['id']}"):
-                            sb.table("accounts").update({"is_active": False}).eq("id", a["id"]).execute()
-                            st.cache_data.clear(); st.rerun()
-                    else:
-                        if st.button("Ativar", key=f"acc_a_{a['id']}"):
-                            sb.table("accounts").update({"is_active": True}).eq("id", a["id"]).execute()
-                            st.cache_data.clear(); st.rerun()
+        for a in accs:
+            c1,c2,c3 = st.columns([6,3,3])
+            with c1: st.write(("✅ " if a["is_active"] else "❌ ") + a["name"])
+            with c2: st.write(f"Tipo: `{a.get('type','')}`")
+            with c3:
+                if a["is_active"]:
+                    if st.button("Desativar", key=f"acc_d_{a['id']}"):
+                        sb.table("accounts").update({"is_active": False}).eq("id", a["id"]).execute(); st.cache_data.clear(); st.rerun()
+                else:
+                    if st.button("Ativar", key=f"acc_a_{a['id']}"):
+                        sb.table("accounts").update({"is_active": True}).eq("id", a["id"]).execute(); st.cache_data.clear(); st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
     # Categorias
@@ -508,7 +503,7 @@ if section == "🧰 Administração":
             st.markdown("**Despesas**"); st.markdown(chips_exp or "_(vazio)_", unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # Cartões (criar + listar — apenas aqui)
+    # Cartões (somente aqui)
     with tabs[3]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("Cartões de crédito")
@@ -526,32 +521,30 @@ if section == "🧰 Administração":
                         "limit_amount": lim, "closing_day": int(closing), "due_day": int(due),
                         "is_active": True, "created_by": user.id
                     }).execute()
-                    st.toast("✅ Cartão salvo!", icon="✅"); st.cache_data.clear(); st.rerun()
+                    st.toast("✅ Cartão criado!", icon="✅"); st.cache_data.clear(); st.rerun()
                 except Exception as e:
                     st.error(f"Falha: {e}")
 
         cards_all = fetch_cards(False)
         limits = fetch_card_limits(); limap = {x["id"]: x for x in limits}
-        if not cards_all:
-            st.info("Nenhum cartão cadastrado.")
-        else:
-            for c in cards_all:
-                colA,colB,colC,colD = st.columns([4,3,3,2])
-                with colA: st.write(f"💳 **{c['name']}**")
-                with colB: st.write(f"Limite: {to_brl(c['limit_amount'])}")
-                with colC: st.write("Disponível: " + to_brl(limap.get(c["id"],{}).get("available_limit", c["limit_amount"])))
-                with colD:
-                    if c["is_active"]:
-                        if st.button("Desativar", key=f"card_d_{c['id']}"):
-                            sb.table("credit_cards").update({"is_active": False}).eq("id", c["id"]).execute()
-                            st.cache_data.clear(); st.rerun()
-                    else:
-                        if st.button("Ativar", key=f"card_a_{c['id']}"):
-                            sb.table("credit_cards").update({"is_active": True}).eq("id", c["id"]).execute()
-                            st.cache_data.clear(); st.rerun()
+        if not cards_all: st.info("Nenhum cartão cadastrado.")
+        for c in cards_all:
+            colA,colB,colC,colD = st.columns([4,3,3,2])
+            with colA: st.write(f"💳 **{c['name']}**")
+            with colB: st.write(f"Limite: {to_brl(c['limit_amount'])}")
+            with colC: st.write("Disponível: " + to_brl(limap.get(c["id"],{}).get("available_limit", c["limit_amount"])))
+            with colD:
+                if c["is_active"]:
+                    if st.button("Desativar", key=f"card_d_{c['id']}"):
+                        sb.table("credit_cards").update({"is_active": False}).eq("id", c["id"]).execute(); st.cache_data.clear(); st.rerun()
+                else:
+                    if st.button("Ativar", key=f"card_a_{c['id']}"):
+                        sb.table("credit_cards").update({"is_active": True}).eq("id", c["id"]).execute(); st.cache_data.clear(); st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-# ====== DASHBOARDS ======
+# =========================
+# DASHBOARDS
+# =========================
 if section == "📊 Dashboards":
     tabs = st.tabs(["Relatórios","Fluxo de caixa"])
     with tabs[0]:
@@ -588,8 +581,7 @@ if section == "📊 Dashboards":
             def eff(r):
                 v = r.get("paid_amount") if r.get("is_paid") else (r.get("planned_amount") or r.get("amount") or 0)
                 return v if r.get("type")=="income" else -v
-            df["eff"] = df.apply(eff, axis=1)
             df["Quando"] = pd.to_datetime(df.get("due_date").fillna(df.get("occurred_at")), errors="coerce").dt.date
-            tot = df.groupby("Quando")["eff"].sum().reset_index()
-            st.line_chart(tot, x="Quando", y="eff")
+            df["Saldo"] = df.apply(eff, axis=1)
+            st.line_chart(df.groupby("Quando")["Saldo"].sum().reset_index(), x="Quando", y="Saldo")
         st.markdown('</div>', unsafe_allow_html=True)
