@@ -1,13 +1,12 @@
-# app.py — v7.2 (sem order() problemáticos + cartões só em Administração com criação)
+# app.py — v7.3 (robust: filtros feitos em Python; cartões só em Administração; criação de cartões)
 from __future__ import annotations
 from datetime import date, datetime, timedelta
-import io
 import uuid
 import pandas as pd
 import streamlit as st
 from supabase_client import get_supabase
 
-st.set_page_config(page_title="Finanças Familiares — v7.2", layout="wide")
+st.set_page_config(page_title="Finanças Familiares — v7.3", layout="wide")
 
 # ====== Estilo ======
 st.markdown("""
@@ -80,10 +79,12 @@ def to_brl(v: float) -> str:
 
 def _to_date_safe(s):
     if not s: return None
-    try: return datetime.fromisoformat(str(s)).date()
-    except Exception:
-        try: return datetime.strptime(str(s), "%Y-%m-%d").date()
-        except Exception: return None
+    s = str(s)
+    for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try: return datetime.strptime(s[:len(fmt)], fmt).date()
+        except Exception: pass
+    try: return datetime.fromisoformat(s).date()
+    except Exception: return None
 
 def fetch_members():
     return sb.table("members").select("id,display_name,role") \
@@ -102,7 +103,7 @@ def fetch_accounts(active_only=False):
     return data
 
 def fetch_cards(active_only=True):
-    # Nunca usar .order('name') aqui — ordeno no Python
+    # Ordeno no Python; evito .order() no PostgREST
     q = sb.table("credit_cards").select("id,household_id,name,limit_amount,closing_day,due_day,is_active,created_by") \
         .eq("household_id", HOUSEHOLD_ID)
     if active_only: q = q.eq("is_active", True)
@@ -115,41 +116,43 @@ def fetch_card_limits():
     data.sort(key=lambda c: (c.get("name") or "").lower())
     return data
 
+def _safe_table(table: str):
+    """Select * com proteção de erro (retorna lista vazia se der APIError)."""
+    try:
+        return sb.table(table).select("*").eq("household_id", HOUSEHOLD_ID).execute().data or []
+    except Exception:
+        return []
+
 def fetch_tx(start: date, end: date):
-    cols = ("id,occurred_at,due_date,type,amount,planned_amount,paid_amount,is_paid,paid_at,"
-            "description,category_id,account_id,member_id,payment_method,card_id,"
-            "installment_group_id,installment_no,installment_total,attachment_url")
-    # Nada de order("due_date") no servidor
-    data = sb.table("transactions").select(cols) \
-        .eq("household_id", HOUSEHOLD_ID) \
-        .gte("occurred_at", start.isoformat()) \
-        .lte("occurred_at", end.isoformat()) \
-        .order("occurred_at", desc=False) \
-        .execute().data or []
-    # Ordeno no Python por due_date (fallback occurred_at)
-    data.sort(key=lambda t: (_to_date_safe(t.get("due_date")) or _to_date_safe(t.get("occurred_at")) or date.min))
-    return data
+    """
+    Robusto: pega *todas* as transações da household e filtra em Python por occurred_at no intervalo.
+    Evita APIError por colunas/filtros/ordenações no PostgREST.
+    """
+    rows = _safe_table("transactions")
+    out = []
+    for t in rows:
+        d = _to_date_safe(t.get("occurred_at"))
+        if d and start <= d <= end:
+            out.append(t)
+    # ordenar por due_date; fallback occurred_at
+    out.sort(key=lambda t: (_to_date_safe(t.get("due_date")) or _to_date_safe(t.get("occurred_at")) or date.min))
+    return out
 
 def fetch_tx_due(start: date, end: date):
     """
-    Fluxo de caixa previsto: 2 queries (due_date no range) + (due_date IS NULL e occurred_at no range),
-    merge e ordenação em Python.
+    Fluxo de caixa previsto: considera due_date no range; se due_date ausente, usa occurred_at.
+    Tudo filtrado em Python.
     """
-    cols = ("id,occurred_at,due_date,type,amount,planned_amount,paid_amount,is_paid,paid_at,"
-            "description,category_id,account_id,member_id,payment_method,card_id,"
-            "installment_group_id,installment_no,installment_total,attachment_url")
-    d1 = sb.table("transactions").select(cols) \
-        .eq("household_id", HOUSEHOLD_ID) \
-        .gte("due_date", start.isoformat()) \
-        .lte("due_date", end.isoformat()).execute().data or []
-    d2 = sb.table("transactions").select(cols) \
-        .eq("household_id", HOUSEHOLD_ID) \
-        .is_("due_date", "null") \
-        .gte("occurred_at", start.isoformat()) \
-        .lte("occurred_at", end.isoformat()).execute().data or []
-    data = d1 + d2
-    data.sort(key=lambda t: (_to_date_safe(t.get("due_date")) or _to_date_safe(t.get("occurred_at")) or date.min))
-    return data
+    rows = _safe_table("transactions")
+    out = []
+    for t in rows:
+        dd = _to_date_safe(t.get("due_date"))
+        od = _to_date_safe(t.get("occurred_at"))
+        key = dd or od
+        if key and start <= key <= end:
+            out.append(t)
+    out.sort(key=lambda t: (_to_date_safe(t.get("due_date")) or _to_date_safe(t.get("occurred_at")) or date.min))
+    return out
 
 # ====== Sidebar — Navegação ======
 with st.sidebar:
@@ -158,14 +161,14 @@ with st.sidebar:
     st.markdown("---")
     if st.button("🔄 Recarregar dados"): st.cache_data.clear(); st.rerun()
 
-st.title("Finanças Familiares — v7.2")
+st.title("Finanças Familiares — v7.3")
 
 # ====== ENTRADA ======
 if section == "🏠 Entrada":
     first_day = date.today().replace(day=1)
     txm = fetch_tx(first_day, date.today())
     res = sum([(t.get("paid_amount") if t.get("is_paid") else t.get("planned_amount") or t.get("amount") or 0)
-               * (1 if t["type"]=="income" else -1) for t in txm]) if txm else 0
+               * (1 if t.get("type")=="income" else -1) for t in txm]) if txm else 0
     c1,c2,c3 = st.columns(3)
     with c1: st.metric("Período", f"{first_day.strftime('%d/%m')}—{date.today().strftime('%d/%m')}")
     with c2: st.metric("Lançamentos", len(txm))
@@ -177,7 +180,7 @@ if section == "🏠 Entrada":
     if txm:
         df = pd.DataFrame(txm)
         df["valor_eff"] = df.apply(lambda r: (r.get("paid_amount") if r.get("is_paid") else r.get("planned_amount") or r.get("amount") or 0)
-                                             * (1 if r["type"]=="income" else -1), axis=1)
+                                             * (1 if r.get("type")=="income" else -1), axis=1)
         df["Membro"] = df["member_id"].map(mem_map).fillna("—")
         s = df.groupby("Membro")["valor_eff"].sum().reset_index()
         st.bar_chart(s, x="Membro", y="valor_eff")
@@ -269,12 +272,12 @@ if section == "💼 Financeiro":
             st.info("Sem lançamentos.")
         else:
             df = pd.DataFrame(tx)
-            df["Data"] = pd.to_datetime(df["occurred_at"]).dt.strftime("%d/%m/%Y")
-            df["Venc"] = pd.to_datetime(df["due_date"]).dt.strftime("%d/%m/%Y").fillna("")
-            df["Tipo"] = df["type"].map({"income":"Receita","expense":"Despesa"})
-            df["Previsto"] = df["planned_amount"].fillna(df["amount"]).fillna(0.0)
-            df["Pago?"] = df["is_paid"].fillna(False)
-            df["Pago (R$)"] = df["paid_amount"].fillna("")
+            df["Data"] = pd.to_datetime(df.get("occurred_at"), errors="coerce").dt.strftime("%d/%m/%Y")
+            df["Venc"] = pd.to_datetime(df.get("due_date"), errors="coerce").dt.strftime("%d/%m/%Y")
+            df["Tipo"] = df.get("type").map({"income":"Receita","expense":"Despesa"})
+            df["Previsto"] = df.get("planned_amount").fillna(df.get("amount")).fillna(0.0)
+            df["Pago?"] = df.get("is_paid").fillna(False)
+            df["Pago (R$)"] = df.get("paid_amount").fillna("")
             df_show = df[["Data","Venc","Tipo","description","Previsto","Pago?","Pago (R$)","attachment_url","id"]]
             st.dataframe(df_show.rename(columns={"description":"Descrição","attachment_url":"Boleto"}), use_container_width=True, hide_index=True)
 
@@ -419,13 +422,13 @@ if section == "💼 Financeiro":
             df = pd.DataFrame(txx)
             def eff(r):
                 v = r.get("paid_amount") if r.get("is_paid") else (r.get("planned_amount") or r.get("amount") or 0)
-                return v if r["type"]=="income" else -v
+                return v if r.get("type")=="income" else -v
             df["eff"] = df.apply(eff, axis=1)
-            df["Quando"] = pd.to_datetime(df["due_date"].fillna(df["occurred_at"])).dt.date
+            df["Quando"] = pd.to_datetime(df.get("due_date").fillna(df.get("occurred_at")), errors="coerce").dt.date
             tot = df.groupby("Quando")["eff"].sum().reset_index()
             st.line_chart(tot, x="Quando", y="eff")
-            cta = df[df["type"]=="income"]["eff"].sum()
-            ctd = -df[df["type"]=="expense"]["eff"].sum()
+            cta = df[df.get("type")=="income"]["eff"].sum()
+            ctd = -df[df.get("type")=="expense"]["eff"].sum()
             c1,c2 = st.columns(2)
             with c1: st.metric("Receitas previstas", to_brl(cta))
             with c2: st.metric("Despesas previstas", to_brl(ctd))
@@ -564,7 +567,7 @@ if section == "📊 Dashboards":
             mem_map = {m["id"]: m["display_name"] for m in mems}
             cat_map = {c["id"]: c["name"] for c in cats}
             df["valor_eff"] = df.apply(lambda r: (r.get("paid_amount") if r.get("is_paid") else r.get("planned_amount") or r.get("amount") or 0)
-                                                 * (1 if r["type"]=="income" else -1), axis=1)
+                                                 * (1 if r.get("type")=="income" else -1), axis=1)
             df["Membro"] = df["member_id"].map(mem_map).fillna("—")
             df["Categoria"] = df["category_id"].map(cat_map).fillna("—")
             st.markdown("#### Por membro")
@@ -584,9 +587,9 @@ if section == "📊 Dashboards":
             df = pd.DataFrame(txx)
             def eff(r):
                 v = r.get("paid_amount") if r.get("is_paid") else (r.get("planned_amount") or r.get("amount") or 0)
-                return v if r["type"]=="income" else -v
+                return v if r.get("type")=="income" else -v
             df["eff"] = df.apply(eff, axis=1)
-            df["Quando"] = pd.to_datetime(df["due_date"].fillna(df["occurred_at"])).dt.date
+            df["Quando"] = pd.to_datetime(df.get("due_date").fillna(df.get("occurred_at")), errors="coerce").dt.date
             tot = df.groupby("Quando")["eff"].sum().reset_index()
             st.line_chart(tot, x="Quando", y="eff")
         st.markdown('</div>', unsafe_allow_html=True)
