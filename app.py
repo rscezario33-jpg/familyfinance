@@ -1,5 +1,6 @@
-# app.py — Family Finance v8.1.0
-# (sidebar contraste + logos 50% + fixas com valor pago + anexos + lembretes por e-mail)
+# app.py — Family Finance v8.2.0
+# (sidebar topo/rodapé; contraste; categorias em AgGrid com ícone/editar/excluir;
+#  membros em AgGrid com editar/excluir/convite; árvore familiar; anexos; lembretes por e-mail)
 from __future__ import annotations
 from datetime import date, datetime, timedelta
 import uuid
@@ -7,27 +8,41 @@ import io
 import os
 import smtplib
 from email.message import EmailMessage
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 import pandas as pd
 import streamlit as st
-
 from supabase_client import get_supabase
 
-st.set_page_config(page_title="Family Finance", layout="wide")
+# AgGrid (grid profissional)
+try:
+    from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode, JsCode
+except Exception:
+    AgGrid = None  # se faltar a dependência, o app segue sem travar
+
+st.set_page_config(page_title="Family Finance", layout="wide", initial_sidebar_state="expanded")
 
 # =========================
-# CSS (visual + contraste sidebar)
+# CSS (visual + contraste + layout topo/rodapé)
 # =========================
 st.markdown("""
 <style>
-/* Sidebar fundo azul escuro */
+/* Sidebar base */
 section[data-testid="stSidebar"] > div {
   background: #0b2038 !important;
   color: #f0f6ff !important;
-  padding-top: 14px;
+  padding-top: 0;
+  height: 100%;
 }
-/* Contraste nos textos da sidebar */
+/* Container flex para topo/miolo/rodapé */
+div.sidebar-flex {
+  display: flex; flex-direction: column; height: 100%;
+}
+div.sidebar-top, div.sidebar-bottom { display:flex; flex-direction:column; align-items:center; }
+div.sidebar-top { padding: 12px 12px 8px 12px; }
+div.sidebar-bottom { padding: 8px 12px 14px 12px; }
+
+/* Contraste textos na sidebar */
 section[data-testid="stSidebar"] label,
 section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] > div,
 section[data-testid="stSidebar"] .stMarkdown,
@@ -35,8 +50,8 @@ section[data-testid="stSidebar"] p,
 section[data-testid="stSidebar"] span {
   color:#f0f6ff !important;
 }
-/* Imagens e títulos */
-section[data-testid="stSidebar"] img { display:block; margin: 6px auto 14px auto; }
+
+/* Títulos e divisores */
 .sidebar-title {
   color:#e6f0ff; font-weight:700; letter-spacing:.6px; text-transform:uppercase;
   font-size:.80rem; margin: 6px 0 6px 6px;
@@ -61,6 +76,9 @@ section[data-testid="stSidebar"] img { display:block; margin: 6px auto 14px auto
 .badge.red{background:#fff1f2;color:#9f1239;border-color:#fecdd3;}
 .badge.green{background:#ecfdf5;color:#065f46;border-color:#bbf7d0;}
 .small { font-size:.85rem; opacity:.75; }
+
+/* Centralização das logos */
+.sidebar-logo-top img, .sidebar-logo-bottom img { display:block; margin:0 auto; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -97,7 +115,7 @@ def _safe_table(name: str):
 # =========================
 # Auth wrappers
 # =========================
-def _signin(email, password): 
+def _signin(email, password):
     sb.auth.sign_in_with_password({"email": email, "password": password})
 
 def _signup(email, password):
@@ -115,15 +133,23 @@ def _user():
     return sess.user if sess and sess.user else None
 
 # =========================
-# Sidebar (logos 50% + Powered by)
+# Sidebar (logo topo, menu, logo rodapé)
 # =========================
 with st.sidebar:
-    # Logo FF reduzida (metade aproximada)
+    # Estrutura flex vertical
+    st.markdown('<div class="sidebar-flex">', unsafe_allow_html=True)
+
+    # Topo (logo FF centralizada)
+    st.markdown('<div class="sidebar-top sidebar-logo-top">', unsafe_allow_html=True)
     st.image("assets/logo_family_finance.png", width=110)
-    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # Miolo (acesso + menu)
+    st.markdown('<div class="sidebar-mid">', unsafe_allow_html=True)
 
     if "auth_ok" not in st.session_state: st.session_state.auth_ok = False
     if not st.session_state.auth_ok:
+        st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
         st.markdown('<div class="sidebar-title">Acesso</div>', unsafe_allow_html=True)
         email = st.text_input("Email").strip()
         pwd   = st.text_input("Senha", type="password")
@@ -158,6 +184,11 @@ with st.sidebar:
                         st.success("Conta criada. Confirme o e-mail (se exigido nas configurações) e faça login.")
                     except Exception as e:
                         st.error(f"Falha ao criar conta: {e}")
+        st.markdown('</div>', unsafe_allow_html=True)   # fecha mid
+        st.markdown('<div class="sidebar-bottom">', unsafe_allow_html=True)
+        st.markdown('<div class="small" style="text-align:center;opacity:.9;">Powered by</div>', unsafe_allow_html=True)
+        st.image("assets/logo_automaGO.png", width=80)
+        st.markdown('</div></div>', unsafe_allow_html=True)  # fecha bottom e flex
         st.stop()
     else:
         u = _user()
@@ -176,9 +207,13 @@ with st.sidebar:
     if st.button("Sair"):
         _signout(); st.session_state.auth_ok = False; st.rerun()
 
-    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)  # fecha mid
+
+    # Rodapé (AutomaGO centralizada)
+    st.markdown('<div class="sidebar-bottom sidebar-logo-bottom">', unsafe_allow_html=True)
     st.markdown('<div class="small" style="text-align:center;opacity:.9;">Powered by</div>', unsafe_allow_html=True)
     st.image("assets/logo_automaGO.png", width=80)
+    st.markdown('</div></div>', unsafe_allow_html=True)  # fecha bottom e flex
 
 user = _user(); assert user  # precisa estar logado daqui pra frente
 
@@ -200,17 +235,22 @@ HOUSEHOLD_ID = ids["household_id"]; MY_MEMBER_ID = ids["member_id"]
 # =========================
 def fetch_members():
     try:
-        return sb.table("members").select("id,display_name,role") \
+        return sb.table("members").select("id,display_name,role,user_id,parent_id") \
             .eq("household_id", HOUSEHOLD_ID).order("display_name").execute().data
     except Exception:
         return []
 
 def fetch_categories():
+    # tenta incluir coluna icon; se não existir, ignora
     try:
-        return sb.table("categories").select("id,name,kind") \
+        return sb.table("categories").select("id,name,kind,icon") \
             .eq("household_id", HOUSEHOLD_ID).order("name").execute().data
     except Exception:
-        return []
+        try:
+            return sb.table("categories").select("id,name,kind") \
+                .eq("household_id", HOUSEHOLD_ID).order("name").execute().data
+        except Exception:
+            return []
 
 def fetch_accounts(active_only=False):
     q = sb.table("accounts").select("id,name,is_active,type").eq("household_id", HOUSEHOLD_ID)
@@ -281,7 +321,6 @@ def _smtp_cfg():
 def send_email(to_emails: List[str], subject: str, body: str, attach_name: Optional[str]=None, attach_bytes: Optional[bytes]=None):
     smtp = _smtp_cfg()
     if not smtp:
-        # silencioso: sem SMTP configurado
         return False
     try:
         msg = EmailMessage()
@@ -304,11 +343,10 @@ def send_email(to_emails: List[str], subject: str, body: str, attach_name: Optio
         return False
 
 @st.cache_data(show_spinner=False)
-def _today_str():  # usado pra “resetar” lembretes por dia
+def _today_str():
     return date.today().isoformat()
 
 def notify_due_bills():
-    # evita repetir notificações no mesmo dia em cada sessão
     key = f"__notified__{_today_str()}"
     if st.session_state.get(key): 
         return
@@ -319,12 +357,10 @@ def notify_due_bills():
         if not txs: 
             st.session_state[key] = True
             return
-        # filtra despesas não pagas
         pend = [t for t in txs if (t.get("type")=="expense" and not t.get("is_paid"))]
         if not pend:
             st.session_state[key] = True
             return
-        # envia para o usuário logado (membros adicionais exigiriam e-mails dos usuários vinculados)
         to = [user.email] if user and user.email else []
         if not to:
             st.session_state[key] = True
@@ -341,7 +377,7 @@ def notify_due_bills():
     finally:
         st.session_state[key] = True
 
-# dispara lembretes (não bloqueia fluxo)
+# dispara lembretes
 notify_due_bills()
 
 # =========================
@@ -404,7 +440,6 @@ if section == "💼 Financeiro":
                 card_name = st.selectbox("Cartão (se aplicável)", ["—"] + list(card_map.keys()))
                 parcelado = st.checkbox("Parcelado? (somente despesa)")
                 n_parc = st.number_input("Nº parcelas", min_value=2, max_value=36, value=2, disabled=not (parcelado and tipo=="expense"))
-            # Anexo opcional (boleto)
             boleto = st.file_uploader("Anexar boleto (PDF/JPG/PNG) — opcional", type=["pdf","jpg","jpeg","png"])
             ok = st.form_submit_button("Lançar")
 
@@ -415,13 +450,11 @@ if section == "💼 Financeiro":
                     card_id = (card_map.get(card_name) or {}).get("id") if method=="card" and card_name!="—" else None
                     attachment_url = None
 
-                    # upload do boleto (se houver)
                     if boleto is not None:
                         ext = os.path.splitext(boleto.name)[1].lower()
                         key = f"{HOUSEHOLD_ID}/{uuid.uuid4().hex}{ext}"
                         data_bytes = boleto.read()
-                        sb.storage.from_("boletos").upload(key, data_bytes)  # bucket precisa existir
-                        # se o bucket for público:
+                        sb.storage.from_("boletos").upload(key, data_bytes)
                         attachment_url = sb.storage.from_("boletos").get_public_url(key)
 
                     if tipo=="expense" and parcelado:
@@ -472,7 +505,6 @@ if section == "💼 Financeiro":
             df["Data"] = pd.to_datetime(df.get("occurred_at"), errors="coerce").dt.strftime("%d/%m/%Y")
             df["Venc"] = pd.to_datetime(df.get("due_date"), errors="coerce").dt.strftime("%d/%m/%Y")
             df["Tipo"] = df.get("type").map({"income":"Receita","expense":"Despesa"})
-            # Previsto x Pago
             df["Previsto (R$)"] = (df.get("planned_amount").fillna(df.get("amount")).fillna(0.0)).astype(float)
             df["Pago?"] = df.get("is_paid").fillna(False)
             df["Pago (R$)"] = df.get("paid_amount").fillna("")
@@ -484,7 +516,6 @@ if section == "💼 Financeiro":
 
             st.markdown("### Marcar pagamento / Anexar boleto")
             tx_id  = st.selectbox("Transação", df["id"])
-            # Valor pago: se não preencher, usa o previsto da transação
             pago_v = st.number_input("Valor pago (R$) — deixe 0 para usar o previsto", min_value=0.0, step=10.0)
             pago_d = st.date_input("Data pagamento", value=date.today())
             novo_boleto = st.file_uploader("Anexar/atualizar boleto", type=["pdf","jpg","jpeg","png"], key="mv_bol")
@@ -493,7 +524,6 @@ if section == "💼 Financeiro":
             with col_a:
                 if st.button("✅ Confirmar pagamento"):
                     try:
-                        # pega previsto da transação selecionada
                         row = df[df["id"]==tx_id].iloc[0]
                         previsto = float(row["Previsto (R$)"]) if row is not None else 0.0
                         valor_final = pago_v if pago_v > 0 else previsto
@@ -518,7 +548,7 @@ if section == "💼 Financeiro":
                         st.error(f"Falha ao anexar: {e}")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # Fixas (cria lançamentos previstos; pagamento é controlado em Movimentações)
+    # Fixas (cria lançamentos previstos; pagamento em Movimentações)
     with tabs[2]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("♻️ Receitas/Despesas fixas")
@@ -546,7 +576,6 @@ if section == "💼 Financeiro":
                     acc_id = (acc_map.get(acc) or {}).get("id")
                     card_id = (card_map.get(card_name) or {}).get("id") if method=="card" and card_name!="—" else None
 
-                    # mês inicial
                     sb.table("transactions").insert({
                         "household_id": HOUSEHOLD_ID, "member_id": MY_MEMBER_ID,
                         "account_id": acc_id, "category_id": cat_id,
@@ -561,7 +590,6 @@ if section == "💼 Financeiro":
                         "created_by": user.id
                     }).execute()
 
-                    # próximos meses
                     d = start_due
                     for _ in range(int(meses)):
                         first_next = (d.replace(day=1) + timedelta(days=32)).replace(day=1)
@@ -619,7 +647,6 @@ if section == "💼 Financeiro":
         else:
             df = pd.DataFrame(txx)
             def eff(r):
-                # Usa pago se pago; senão previsto/amount — positivo para receita, negativo para despesa
                 v = r.get("paid_amount") if r.get("is_paid") else (r.get("planned_amount") or r.get("amount") or 0)
                 return v if r.get("type")=="income" else -v
             df["Quando"] = pd.to_datetime(df.get("due_date").fillna(df.get("occurred_at")), errors="coerce").dt.date
@@ -628,30 +655,141 @@ if section == "💼 Financeiro":
         st.markdown('</div>', unsafe_allow_html=True)
 
 # =========================
-# ADMINISTRAÇÃO (cartões só aqui)
+# ADMINISTRAÇÃO (Membros, Contas, Categorias, Cartões)
 # =========================
 if section == "🧰 Administração":
     tabs = st.tabs(["Membros","Contas","Categorias","Cartões"])
 
-    # Membros
+    # ---------- Membros (AgGrid + excluir + convite + árvore) ----------
     with tabs[0]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
-        st.subheader("Membros")
-        nm = st.text_input("Seu nome de exibição", value="Você")
-        if st.button("Salvar"):
+        st.subheader("Membros da família")
+
+        # Form de cadastro/edição simples
+        colm1, colm2, colm3 = st.columns([2,1,1])
+        nm = colm1.text_input("Nome de exibição", value="")
+        role = colm2.selectbox("Papel", ["owner","member","viewer"], index=1)
+        parent_id_input = colm3.text_input("Parent ID (opcional)")
+        if st.button("Salvar membro"):
             try:
                 sb.table("members").upsert({
-                    "household_id": HOUSEHOLD_ID,"user_id": user.id,"display_name": nm.strip(),"role":"owner"
-                }, on_conflict="household_id,user_id").execute()
-                st.toast("✅ Salvo!", icon="✅"); st.cache_data.clear(); st.rerun()
+                    "household_id": HOUSEHOLD_ID,
+                    "user_id": None,  # pode ser preenchido ao aceitar convite
+                    "display_name": nm.strip(),
+                    "role": role,
+                    "parent_id": parent_id_input.strip() or None
+                }).execute()
+                st.toast("✅ Membro salvo!", icon="✅"); st.cache_data.clear(); st.rerun()
             except Exception as e: st.error(str(e))
+
         mems = fetch_members()
-        if mems:
-            chips = " ".join([f'<span class="badge">👤 {m["display_name"]}{" · owner" if m["role"]=="owner" else ""}</span>' for m in mems])
-            st.markdown(chips, unsafe_allow_html=True)
+        if not mems:
+            st.info("Sem membros cadastrados ainda.")
+        else:
+            dfm = pd.DataFrame(mems)
+            dfm = dfm.rename(columns={
+                "display_name":"Nome",
+                "role":"Papel",
+                "user_id":"Usuário",
+                "parent_id":"Pai"
+            })
+
+            # Grid AgGrid (se disponível)
+            if AgGrid is not None:
+                gob = GridOptionsBuilder.from_dataframe(dfm[["id","Nome","Papel","Usuário","Pai"]])
+                gob.configure_selection("single")
+                gob.configure_grid_options(editType="fullRow")
+                gob.configure_columns({
+                    "id": {"editable": False},
+                    "Nome": {"editable": True},
+                    "Papel": {"editable": True, "cellEditor": "agSelectCellEditor", "cellEditorParams": {"values": ["owner","member","viewer"]}},
+                    "Usuário": {"editable": False},
+                    "Pai": {"editable": True},
+                })
+                grid = AgGrid(
+                    dfm[["id","Nome","Papel","Usuário","Pai"]],
+                    gridOptions=gob.build(),
+                    update_mode=GridUpdateMode.MODEL_CHANGED,
+                    height=320,
+                    fit_columns_on_grid_load=True,
+                    key="grid_membros"
+                )
+                edited_rows = grid["data"]
+                # Botões de ação
+                cmm1, cmm2, cmm3 = st.columns([1,1,2])
+                with cmm1:
+                    if st.button("💾 Salvar edições"):
+                        try:
+                            for _, row in edited_rows.iterrows():
+                                sb.table("members").update({
+                                    "display_name": row["Nome"],
+                                    "role": row["Papel"],
+                                    "parent_id": row["Pai"] if row["Pai"] else None
+                                }).eq("id", row["id"]).execute()
+                            st.toast("Edições salvas!", icon="✅"); st.cache_data.clear(); st.rerun()
+                        except Exception as e:
+                            st.error(f"Falha ao salvar: {e}")
+                with cmm2:
+                    sel = grid["selected_rows"]
+                    if st.button("🗑️ Excluir selecionado"):
+                        try:
+                            if not sel:
+                                st.warning("Selecione um membro no grid.")
+                            else:
+                                sel_id = sel[0]["id"]
+                                sb.table("members").delete().eq("id", sel_id).execute()
+                                st.toast("Membro excluído!", icon="🗑️"); st.cache_data.clear(); st.rerun()
+                        except Exception as e:
+                            st.error(f"Falha ao excluir: {e}")
+                with cmm3:
+                    invite_email = st.text_input("Enviar convite por e-mail (usuário receberá link do app)")
+                    if st.button("✉️ Enviar convite"):
+                        try:
+                            # MVP: grava um registro (se existir tabela) e envia e-mail (se SMTP configurado)
+                            try:
+                                sb.table("pending_invites").insert({
+                                    "household_id": HOUSEHOLD_ID,
+                                    "email": invite_email,
+                                    "invited_by": user.id
+                                }).execute()
+                            except Exception:
+                                pass
+                            app_url = st.secrets.get("app", {}).get("url", "https://familyfinance.streamlit.app") if hasattr(st, "secrets") else "https://familyfinance.streamlit.app"
+                            ok = send_email(
+                                [invite_email],
+                                "Convite — Family Finance",
+                                f"Você foi convidado(a) para o Family Finance.\nAcesse: {app_url}\n\nApós entrar, você será associado(a) ao lar."
+                            )
+                            st.toast("Convite registrado!" + (" ✉️ E-mail enviado." if ok else " (sem SMTP configurado)"), icon="✉️")
+                        except Exception as e:
+                            st.error(f"Falha ao convidar: {e}")
+            else:
+                st.warning("Para edição avançada, instale `st-aggrid` no requirements. Exibindo tabela simples.")
+                st.dataframe(dfm, use_container_width=True, hide_index=True)
+
+        # Árvore genealógica (Graphviz)
+        st.markdown("### 👪 Árvore familiar")
+        try:
+            import graphviz
+            mems2 = fetch_members()
+            if mems2:
+                g = graphviz.Digraph(format="svg")
+                g.attr("node", shape="box", style="rounded,filled", color="#0b2038", fillcolor="#eef6ff")
+                id_to_name = {m["id"]: m["display_name"] for m in mems2}
+                for m in mems2:
+                    g.node(m["id"], f'{m["display_name"]}\n({m.get("role","")})')
+                for m in mems2:
+                    pid = m.get("parent_id")
+                    if pid and pid in id_to_name:
+                        g.edge(pid, m["id"])
+                st.graphviz_chart(g)
+            else:
+                st.info("Cadastre membros e defina **Pai** (parent_id) para montar a árvore.")
+        except Exception:
+            st.info("Instale `graphviz` no ambiente para visualizar a árvore familiar.")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # Contas
+    # ---------- Contas ----------
     with tabs[1]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("Contas")
@@ -680,26 +818,109 @@ if section == "🧰 Administração":
                         sb.table("accounts").update({"is_active": True}).eq("id", a["id"]).execute(); st.cache_data.clear(); st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # Categorias
+    # ---------- Categorias (AgGrid + ícone + excluir) ----------
     with tabs[2]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("Categorias")
-        cn = st.text_input("Nome da categoria")
-        ck = st.selectbox("Tipo", ["income","expense"], format_func=lambda k: {"income":"Receita","expense":"Despesa"}[k])
+
+        # Paleta simples de ícones (emojis) para escolher
+        ICON_CHOICES: Dict[str,str] = {
+            "—": "",
+            "🛒 Mercado": "🛒",
+            "⚡ Energia": "⚡",
+            "💧 Água": "💧",
+            "📶 Internet": "📶",
+            "🏠 Aluguel": "🏠",
+            "🚗 Transporte": "🚗",
+            "🍽️ Alimentação": "🍽️",
+            "💊 Saúde": "💊",
+            "🎓 Educação": "🎓",
+            "💼 Salário": "💼",
+            "💳 Cartão": "💳",
+            "🎉 Lazer": "🎉",
+        }
+
+        colc1, colc2, colc3, colc4 = st.columns([2,1,1,1.5])
+        cn = colc1.text_input("Nome da categoria")
+        ck = colc2.selectbox("Tipo", ["income","expense"], format_func=lambda k: {"income":"Receita","expense":"Despesa"}[k])
+        ic = colc3.selectbox("Ícone", list(ICON_CHOICES.keys()), index=0)
         if st.button("Salvar categoria"):
             try:
-                sb.table("categories").insert({"household_id": HOUSEHOLD_ID,"name": cn.strip(),"kind": ck}).execute()
+                payload = {"household_id": HOUSEHOLD_ID,"name": cn.strip(),"kind": ck}
+                # tenta gravar coluna icon se existir
+                if ICON_CHOICES.get(ic):
+                    try:
+                        payload["icon"] = ICON_CHOICES[ic]
+                    except Exception:
+                        pass
+                sb.table("categories").insert(payload).execute()
                 st.toast("✅ Categoria salva!", icon="✅"); st.cache_data.clear(); st.rerun()
             except Exception as e: st.error(str(e))
+
         cats = fetch_categories()
-        if cats:
-            chips_inc = " ".join([f'<span class="badge green">#{c["name"]}</span>' for c in cats if c["kind"]=="income"])
-            chips_exp = " ".join([f'<span class="badge red">#{c["name"]}</span>' for c in cats if c["kind"]=="expense"])
-            st.markdown("**Receitas**"); st.markdown(chips_inc or "_(vazio)_", unsafe_allow_html=True)
-            st.markdown("**Despesas**"); st.markdown(chips_exp or "_(vazio)_", unsafe_allow_html=True)
+        if not cats:
+            st.info("Nenhuma categoria cadastrada.")
+        else:
+            # Apresenta coluna de ícone se existir
+            for c in cats:
+                if "icon" not in c: c["icon"] = ""
+            dfc = pd.DataFrame(cats).rename(columns={"name":"Nome","kind":"Tipo","icon":"Ícone"})
+            # Grid
+            if AgGrid is not None:
+                gob = GridOptionsBuilder.from_dataframe(dfc[["id","Ícone","Nome","Tipo"]])
+                gob.configure_selection("single")
+                gob.configure_grid_options(editType="fullRow")
+                gob.configure_columns({
+                    "id": {"editable": False},
+                    "Ícone": {"editable": True},
+                    "Nome": {"editable": True},
+                    "Tipo": {"editable": True, "cellEditor": "agSelectCellEditor", "cellEditorParams": {"values": ["income","expense"]}},
+                })
+                grid = AgGrid(
+                    dfc[["id","Ícone","Nome","Tipo"]],
+                    gridOptions=gob.build(),
+                    update_mode=GridUpdateMode.MODEL_CHANGED,
+                    height=320,
+                    fit_columns_on_grid_load=True,
+                    key="grid_categorias"
+                )
+                edited_rows = grid["data"]
+                colg1, colg2 = st.columns([1,1])
+                with colg1:
+                    if st.button("💾 Salvar edições"):
+                        try:
+                            for _, row in edited_rows.iterrows():
+                                payload = {
+                                    "name": row["Nome"],
+                                    "kind": row["Tipo"],
+                                }
+                                # atualiza ícone se a coluna existir
+                                try:
+                                    payload["icon"] = row["Ícone"]
+                                except Exception:
+                                    pass
+                                sb.table("categories").update(payload).eq("id", row["id"]).execute()
+                            st.toast("Edições salvas!", icon="✅"); st.cache_data.clear(); st.rerun()
+                        except Exception as e:
+                            st.error(f"Falha ao salvar: {e}")
+                with colg2:
+                    sel = grid["selected_rows"]
+                    if st.button("🗑️ Excluir selecionada"):
+                        try:
+                            if not sel:
+                                st.warning("Selecione uma categoria no grid.")
+                            else:
+                                sel_id = sel[0]["id"]
+                                sb.table("categories").delete().eq("id", sel_id).execute()
+                                st.toast("Categoria excluída!", icon="🗑️"); st.cache_data.clear(); st.rerun()
+                        except Exception as e:
+                            st.error(f"Falha ao excluir: {e}")
+            else:
+                st.warning("Para edição avançada, instale `st-aggrid` no requirements.")
+                st.dataframe(dfc[["Ícone","Nome","Tipo"]], use_container_width=True, hide_index=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-    # Cartões (somente aqui)
+    # ---------- Cartões ----------
     with tabs[3]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("Cartões de crédito")
