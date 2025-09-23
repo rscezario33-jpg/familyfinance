@@ -1,4 +1,4 @@
-# app.py — Family Finance v8.0.1 (use_container_width fix)
+# app.py — Family Finance v8.0.2 (login/signup validation + use_container_width)
 from __future__ import annotations
 from datetime import date, datetime, timedelta
 import uuid
@@ -61,17 +61,39 @@ with st.sidebar:
     if "auth_ok" not in st.session_state: st.session_state.auth_ok = False
     if not st.session_state.auth_ok:
         st.markdown('<div class="sidebar-title">Acesso</div>', unsafe_allow_html=True)
-        email = st.text_input("Email")
+        email = st.text_input("Email").strip()
         pwd   = st.text_input("Senha", type="password")
+
+        def _validate_inputs() -> bool:
+            if not email:
+                st.warning("Informe um e-mail.")
+                return False
+            if not pwd:
+                st.warning("Informe uma senha.")
+                return False
+            if len(pwd) < 6:
+                st.warning("A senha deve ter pelo menos 6 caracteres.")
+                return False
+            return True
+
         c1, c2 = st.columns(2)
         with c1:
             if st.button("Entrar"):
-                try: _signin(email,pwd); st.session_state.auth_ok = True; st.rerun()
-                except Exception as e: st.error(str(e))
+                if _validate_inputs():
+                    try:
+                        _signin(email, pwd)
+                        st.session_state.auth_ok = True
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Falha no login: {e}")
         with c2:
             if st.button("Criar conta"):
-                try: _signup(email,pwd); st.success("Conta criada. Confirme o e-mail e faça login.")
-                except Exception as e: st.error(str(e))
+                if _validate_inputs():
+                    try:
+                        _signup(email, pwd)
+                        st.success("Conta criada. Confirme o e-mail (se exigido nas configurações) e faça login.")
+                    except Exception as e:
+                        st.error(f"Falha ao criar conta: {e}")
         st.stop()
     else:
         u = _user()
