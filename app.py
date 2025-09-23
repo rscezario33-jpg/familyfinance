@@ -1,13 +1,12 @@
-# app.py — v7.0
+# app.py — v7.1
 from __future__ import annotations
 from datetime import date, datetime, timedelta
-import io
 import uuid
 import pandas as pd
 import streamlit as st
 from supabase_client import get_supabase
 
-st.set_page_config(page_title="Finanças Familiares — v7", layout="wide")
+st.set_page_config(page_title="Finanças Familiares — v7.1", layout="wide")
 
 # ====== estilo ======
 st.markdown("""
@@ -33,111 +32,187 @@ sb = get_supabase()
 # ====== auth ======
 def _user():
     sess = sb.auth.get_session()
-    return sess.user if sess and sess.user else None
+    try:
+        return sess.user if sess and sess.user else None
+    except Exception:
+        return None
 
-def _signin(email: str, password: str): sb.auth.sign_in_with_password({"email": email, "password": password})
-def _signup(email: str, password: str): sb.auth.sign_up({"email": email, "password": password})
-def _signout(): sb.auth.sign_out()
+def _signin(email: str, password: str):
+    sb.auth.sign_in_with_password({"email": email, "password": password})
+
+def _signup(email: str, password: str):
+    sb.auth.sign_up({"email": email, "password": password})
+
+def _signout():
+    sb.auth.sign_out()
 
 with st.sidebar:
     st.header("🔐 Login")
-    if "auth_ok" not in st.session_state: st.session_state.auth_ok = False
+    if "auth_ok" not in st.session_state:
+        st.session_state.auth_ok = False
     if not st.session_state.auth_ok:
         email = st.text_input("Email")
         pwd   = st.text_input("Senha", type="password")
         c1, c2 = st.columns(2)
         with c1:
             if st.button("Entrar"):
-                try: _signin(email,pwd); st.session_state.auth_ok = True; st.rerun()
-                except Exception as e: st.error(str(e))
+                try:
+                    _signin(email,pwd)
+                    st.session_state.auth_ok = True
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
         with c2:
             if st.button("Criar conta"):
-                try: _signup(email,pwd); st.success("Conta criada. Faça login.")
-                except Exception as e: st.error(str(e))
+                try:
+                    _signup(email,pwd)
+                    st.success("Conta criada. Faça login.")
+                except Exception as e:
+                    st.error(str(e))
     else:
         u = _user()
         if u: st.caption(f"Logado: {u.email}")
         if st.button("Sair"):
             _signout(); st.session_state.auth_ok = False; st.rerun()
 
-if not st.session_state.auth_ok: st.stop()
-user = _user(); assert user
+if not st.session_state.auth_ok:
+    st.stop()
+
+user = _user()
+assert user, "Usuário não autenticado."
 
 # ====== bootstrap (aceita convites + cria família/membro) ======
 @st.cache_data(show_spinner=False)
 def bootstrap(user_id: str):
-    try: sb.rpc("accept_pending_invite").execute()
-    except Exception: pass
+    try:
+        sb.rpc("accept_pending_invite").execute()
+    except Exception:
+        pass
     res = sb.rpc("create_household_and_member", {"display_name": "Você"}).execute().data
-    return {"household_id": res[0]["household_id"], "member_id": res[0]["member_id"]}
+    # Espera formato: [{"household_id": "...", "member_id": "..."}]
+    item = res[0] if isinstance(res, list) and res else res
+    return {"household_id": item["household_id"], "member_id": item["member_id"]}
 
 ids = bootstrap(user.id)
 HOUSEHOLD_ID = ids["household_id"]; MY_MEMBER_ID = ids["member_id"]
 
 # ====== helpers ======
-def to_brl(v: float) -> str:
-    return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+def to_brl(v: float | int | None) -> str:
+    v = v or 0
+    return f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 def fetch_members():
-    return sb.table("members").select("id,display_name,role").eq("household_id", HOUSEHOLD_ID).order("display_name").execute().data
+    q = sb.table("members").select("id,display_name,role").eq("household_id", HOUSEHOLD_ID)
+    try:
+        return q.order("display_name", desc=False).execute().data
+    except Exception:
+        return q.execute().data
 
 def fetch_categories():
-    return sb.table("categories").select("id,name,kind").eq("household_id", HOUSEHOLD_ID).order("name").execute().data
+    q = sb.table("categories").select("id,name,kind").eq("household_id", HOUSEHOLD_ID)
+    try:
+        return q.order("name", desc=False).execute().data
+    except Exception:
+        return q.execute().data
 
 def fetch_accounts(active_only=False):
-    q = sb.table("accounts").select("id,name,is_active,type").eq("household_id", HOUSEHOLD_ID).order("name")
-    if active_only: q = q.eq("is_active", True)
-    return q.execute().data
+    q = sb.table("accounts").select("id,name,is_active,type").eq("household_id", HOUSEHOLD_ID)
+    if active_only:
+        q = q.eq("is_active", True)
+    try:
+        return q.order("name", desc=False).execute().data
+    except Exception:
+        return q.execute().data
 
 def fetch_cards(active_only=True):
-    q = sb.table("credit_cards").select("*").eq("household_id", HOUSEHOLD_ID)
-    if active_only: q = q.eq("is_active", True)
-    return q.order("name").execute().data
+    q = sb.table("credit_cards").select("id,name,limit_amount,closing_day,due_day,is_active").eq("household_id", HOUSEHOLD_ID)
+    if active_only:
+        q = q.eq("is_active", True)
+    try:
+        return q.order("name", desc=False).execute().data
+    except Exception:
+        return q.execute().data
 
 def fetch_card_limits():
-    return sb.table("v_card_limit").select("*").eq("household_id", HOUSEHOLD_ID).execute().data
+    # View opcional com available_limit; se não existir, retorna vazio
+    try:
+        return sb.table("v_card_limit").select("id,available_limit").eq("household_id", HOUSEHOLD_ID).execute().data
+    except Exception:
+        return []
 
 def fetch_tx(start: date, end: date):
-    return sb.table("transactions").select(
+    # Filtro simples por occurred_at; ordena por due_date quando possível
+    base = sb.table("transactions").select(
         "id,occurred_at,due_date,type,amount,planned_amount,paid_amount,is_paid,paid_at,description,category_id,account_id,member_id,payment_method,card_id,installment_group_id,installment_no,installment_total,attachment_url"
-    ).eq("household_id", HOUSEHOLD_ID).gte("occurred_at", start.isoformat()).lte("occurred_at", end.isoformat()).order("due_date", desc=False).execute().data
+    ).eq("household_id", HOUSEHOLD_ID).gte("occurred_at", start.isoformat()).lte("occurred_at", end.isoformat())
+    try:
+        return base.order("due_date", desc=False).execute().data
+    except Exception:
+        # fallback
+        try:
+            return base.order("occurred_at", desc=False).execute().data
+        except Exception:
+            return base.execute().data
 
 def fetch_tx_due(start: date, end: date):
-    # para fluxo de caixa: considerar due_date no range (se vazio, cai no occurred_at)
-    return sb.table("transactions").select("*").eq("household_id", HOUSEHOLD_ID) \
-        .gte("coalesce(due_date,occurred_at)", start.isoformat()) \
-        .lte("coalesce(due_date,occurred_at)", end.isoformat()) \
-        .order("coalesce(due_date,occurred_at)", desc=False).execute().data
+    """
+    Fluxo de caixa previsto: considerar due_date dentro do range
+    e, se due_date for nulo, usar occurred_at — sem usar funções SQL em filtros.
+    Implementado via OR do PostgREST.
+    """
+    q = sb.table("transactions").select(
+        "id,occurred_at,due_date,type,amount,planned_amount,paid_amount,is_paid,description,category_id,account_id,member_id"
+    ).eq("household_id", HOUSEHOLD_ID)
+    expr = (
+        f"and(due_date.gte.{start.isoformat()},due_date.lte.{end.isoformat()}),"
+        f"and(due_date.is.null,occurred_at.gte.{start.isoformat()},occurred_at.lte.{end.isoformat()})"
+    )
+    q = q.or_(expr)
+    # Ordena por due_date (nulos primeiro) e depois por occurred_at
+    try:
+        return q.order("due_date", desc=False, nulls_first=True).order("occurred_at", desc=False).execute().data
+    except Exception:
+        try:
+            return q.order("occurred_at", desc=False).execute().data
+        except Exception:
+            return q.execute().data
 
 # ====== sidebar menu ======
 with st.sidebar:
     st.header("📍 Navegação")
     section = st.radio("Área", ["🏠 Entrada","💼 Financeiro","🧰 Administração","📊 Dashboards"], index=0)
     st.markdown("---")
-    if st.button("🔄 Recarregar dados"): st.cache_data.clear(); st.rerun()
+    if st.button("🔄 Recarregar dados"):
+        st.cache_data.clear(); st.rerun()
 
-st.title("Finanças Familiares — v7")
+st.title("Finanças Familiares — v7.1")
 
 # ====== Entrada ======
 if section == "🏠 Entrada":
     first_day = date.today().replace(day=1)
     txm = fetch_tx(first_day, date.today())
-    res = sum([(t.get("paid_amount") if t.get("is_paid") else t.get("planned_amount") or t.get("amount") or 0)
-               * (1 if t["type"]=="income" else -1) for t in txm]) if txm else 0
+    res = sum([
+        ((t.get("paid_amount") if t.get("is_paid") else (t.get("planned_amount") or t.get("amount") or 0.0)))
+        * (1 if t["type"] == "income" else -1)
+        for t in (txm or [])
+    ])
     c1,c2,c3 = st.columns(3)
     with c1: st.metric("Período", f"{first_day.strftime('%d/%m')}—{date.today().strftime('%d/%m')}")
-    with c2: st.metric("Lançamentos", len(txm))
+    with c2: st.metric("Lançamentos", len(txm or []))
     with c3: st.metric("Resultado (previsto)", to_brl(res))
 
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.subheader("Visão por membro (mês)")
-    mems = fetch_members(); mem_map = {m["id"]: m["display_name"] for m in mems}
+    mems = fetch_members(); mem_map = {m["id"]: m["display_name"] for m in (mems or [])}
     if txm:
         df = pd.DataFrame(txm)
-        df["valor_eff"] = df.apply(lambda r: (r.get("paid_amount") if r.get("is_paid") else r.get("planned_amount") or r.get("amount") or 0)
-                                             * (1 if r["type"]=="income" else -1), axis=1)
+        df["valor_eff"] = df.apply(
+            lambda r: ((r.get("paid_amount") if r.get("is_paid") else (r.get("planned_amount") or r.get("amount") or 0.0)))
+                      * (1 if r["type"]=="income" else -1),
+            axis=1
+        )
         df["Membro"] = df["member_id"].map(mem_map).fillna("—")
-        s = df.groupby("Membro")["valor_eff"].sum().reset_index()
+        s = df.groupby("Membro", as_index=False)["valor_eff"].sum()
         st.bar_chart(s, x="Membro", y="valor_eff")
     else:
         st.info("Sem lançamentos no mês.")
@@ -150,16 +225,13 @@ if section == "🏠 Entrada":
 
 # ====== Financeiro ======
 if section == "💼 Financeiro":
-    sub = st.tabs(["Lançamentos","Movimentações","Receitas/Despesas fixas","Orçamentos","Cartão","Fluxo de caixa"])[0]
-    # truque simples pra descobrir qual aba está ativa
-    # (Streamlit não expõe diretamente; então ofereço botões Âncoras)
-    st.markdown("")
+    st.tabs(["Lançamentos","Movimentações","Receitas/Despesas fixas","Orçamentos","Fluxo de caixa"])
 
     # ————— Lançamentos (rápido + parcelados + cartão) —————
     with st.expander("➕ Lançar (rápido / parcelado / cartão)", True):
-        cats = fetch_categories(); cat_map = {c["name"]: c for c in cats}
-        accs = fetch_accounts(True); acc_map = {a["name"]: a for a in accs}
-        cards = fetch_cards(True); card_map = {c["name"]: c for c in cards}
+        cats = fetch_categories(); cat_map = {c["name"]: c for c in (cats or [])}
+        accs = fetch_accounts(True); acc_map = {a["name"]: a for a in (accs or [])}
+        cards = fetch_cards(True); card_map = {c["name"]: c for c in (cards or [])}
 
         with st.form("quick_tx"):
             col1,col2 = st.columns(2)
@@ -191,20 +263,19 @@ if section == "💼 Financeiro":
                             "p_account": acc_id,
                             "p_category": cat_id,
                             "p_desc": desc,
-                            "p_total": val,
+                            "p_total": float(val),
                             "p_n": int(n_parc),
                             "p_first_due": due.isoformat(),
                             "p_payment_method": method,
                             "p_card_id": card_id
                         }).execute()
                     else:
-                        # simples
-                        planned = val
+                        planned = float(val)
                         sb.table("transactions").insert({
                             "household_id": HOUSEHOLD_ID, "member_id": MY_MEMBER_ID,
                             "account_id": acc_id, "category_id": cat_id,
                             "type": tipo,
-                            "amount": val,
+                            "amount": float(val),
                             "planned_amount": planned,
                             "occurred_at": data.isoformat(),
                             "due_date": due.isoformat(),
@@ -222,11 +293,12 @@ if section == "💼 Financeiro":
         ini = st.date_input("Início", value=date.today().replace(day=1), key="mv_ini")
         fim = st.date_input("Fim", value=date.today(), key="mv_fim")
         tx = fetch_tx(ini, fim)
-        if not tx: st.info("Sem lançamentos."); 
+        if not tx:
+            st.info("Sem lançamentos.")
         else:
             df = pd.DataFrame(tx)
             df["Data"] = pd.to_datetime(df["occurred_at"]).dt.strftime("%d/%m/%Y")
-            df["Venc"] = pd.to_datetime(df["due_date"]).dt.strftime("%d/%m/%Y").fillna("")
+            df["Venc"] = pd.to_datetime(df["due_date"]).dt.strftime("%d/%m/%Y")
             df["Tipo"] = df["type"].map({"income":"Receita","expense":"Despesa"})
             df["Previsto"] = df["planned_amount"].fillna(df["amount"]).fillna(0.0)
             df["Pago?"] = df["is_paid"].fillna(False)
@@ -241,7 +313,7 @@ if section == "💼 Financeiro":
             pago_dt  = st.date_input("Data pagamento", value=date.today())
             if st.button("✅ Confirmar pagamento"):
                 try:
-                    sb.rpc("mark_transaction_paid", {"p_tx_id": tx_id, "p_amount": pago_val, "p_date": pago_dt.isoformat()}).execute()
+                    sb.rpc("mark_transaction_paid", {"p_tx_id": tx_id, "p_amount": float(pago_val), "p_date": pago_dt.isoformat()}).execute()
                     st.toast("Pagamento registrado!", icon="✅"); st.cache_data.clear(); st.rerun()
                 except Exception as e:
                     st.error(f"Falha ao marcar pago: {e}")
@@ -252,24 +324,20 @@ if section == "💼 Financeiro":
             up = st.file_uploader("Arquivo (PDF/IMG)", type=["pdf","png","jpg","jpeg"], key="att_file")
             if up and st.button("📎 Enviar anexo"):
                 try:
-                    # Exemplo simples: salva como attachment_url = "uploaded:<nome>"
-                    # (Produção: use Supabase Storage via sb.storage.from_('invoices').upload(...))
                     fname = f"{uuid.uuid4().hex}_{up.name}"
                     content = up.read()
-                    # se você já usa storage no supabase_client, chame aqui:
-                    # sb.storage.from_('invoices').upload(f"{HOUSEHOLD_ID}/{tx_id2}/{fname}", content, {"contentType": up.type})
-                    # url = sb.storage.from_('invoices').get_public_url(f"{HOUSEHOLD_ID}/{tx_id2}/{fname}").get('publicUrl')
-                    url = f"uploaded:{fname}"  # placeholder
+                    # Exemplo simples: URL simbólica. Em produção, use Storage.
+                    url = f"uploaded:{fname}"
                     sb.table("transactions").update({"attachment_url": url}).eq("id", tx_id2).execute()
                     st.toast("Anexo salvo!", icon="📎"); st.cache_data.clear(); st.rerun()
                 except Exception as e:
                     st.error(f"Falha no anexo: {e}")
 
-    # ————— Fixas (previstas e cópia p/ meses seguintes) —————
+    # ————— Fixas —————
     with st.expander("♻️ Receitas/Despesas fixas"):
-        cats = fetch_categories(); cat_map = {c["name"]: c for c in cats}
-        accs = fetch_accounts(True); acc_map = {a["name"]: a for a in accs}
-        cards = fetch_cards(True); card_map = {c["name"]: c for c in cards}
+        cats = fetch_categories(); cat_map = {c["name"]: c for c in (cats or [])}
+        accs = fetch_accounts(True); acc_map = {a["name"]: a for a in (accs or [])}
+        cards = fetch_cards(True); card_map = {c["name"]: c for c in (cards or [])}
 
         with st.form("fixas_form"):
             col1,col2 = st.columns(2)
@@ -296,8 +364,8 @@ if section == "💼 Financeiro":
                         "household_id": HOUSEHOLD_ID, "member_id": MY_MEMBER_ID,
                         "account_id": acc_id, "category_id": cat_id,
                         "type": tipo,
-                        "amount": previsto,           # mantém amount = previsto
-                        "planned_amount": previsto,   # chave para previsto vs. pago
+                        "amount": float(previsto),
+                        "planned_amount": float(previsto),
                         "occurred_at": start_due.isoformat(),
                         "due_date": start_due.isoformat(),
                         "description": desc,
@@ -306,16 +374,16 @@ if section == "💼 Financeiro":
                         "created_by": user.id
                     }).execute()
 
-                    # copia para próximos meses (só datas)
+                    # copia para próximos meses
                     d = start_due
                     for _ in range(int(meses)):
-                        d = (d + timedelta(days=32)).replace(day=start_due.day)  # “pula” 1 mês aprox.
+                        d = (d + timedelta(days=32)).replace(day=min(start_due.day, 28))
                         sb.table("transactions").insert({
                             "household_id": HOUSEHOLD_ID, "member_id": MY_MEMBER_ID,
                             "account_id": acc_id, "category_id": cat_id,
                             "type": tipo,
-                            "amount": previsto,
-                            "planned_amount": previsto,
+                            "amount": float(previsto),
+                            "planned_amount": float(previsto),
                             "occurred_at": d.isoformat(),
                             "due_date": d.isoformat(),
                             "description": desc,
@@ -327,19 +395,19 @@ if section == "💼 Financeiro":
                 except Exception as e:
                     st.error(f"Falha: {e}")
 
-        st.caption("Quando marcar o pagamento em Movimentações: se não informar 'Valor pago', usamos o previsto; 'Data de pagamento' padrão é hoje.")
+        st.caption("Ao marcar pagamento em Movimentações: se não informar 'Valor pago', usamos o previsto; a 'Data de pagamento' padrão é hoje.")
 
-    # ————— Orçamentos (v6) —————
+    # ————— Orçamentos —————
     with st.expander("💡 Orçamentos"):
         month_str = st.text_input("Mês (YYYY-MM)", value=date.today().strftime("%Y-%m"))
-        cats = fetch_categories(); cat_by_name = {c["name"]: c for c in cats}
+        cats = fetch_categories(); cat_by_name = {c["name"]: c for c in (cats or [])}
         colb1,colb2 = st.columns([2,1])
         with colb1: cat_name = st.selectbox("Categoria", list(cat_by_name.keys()) or ["Mercado"])
         with colb2: val_orc = st.number_input("Orçado (R$)", min_value=0.0, step=50.0)
         if st.button("Salvar orçamento"):
             try:
                 cid = (cat_by_name.get(cat_name) or {}).get("id")
-                sb.rpc("upsert_budget", {"p_household": HOUSEHOLD_ID, "p_month": month_str, "p_category": cid, "p_amount": val_orc}).execute()
+                sb.rpc("upsert_budget", {"p_household": HOUSEHOLD_ID, "p_month": month_str, "p_category": cid, "p_amount": float(val_orc)}).execute()
                 st.toast("✅ Salvo!", icon="✅")
             except Exception as e:
                 st.error(f"Falha: {e}")
@@ -349,48 +417,14 @@ if section == "💼 Financeiro":
         except Exception as e:
             res = []; st.error(f"Falha: {e}")
         dfba = pd.DataFrame(res) if res else pd.DataFrame()
-        if dfba.empty: st.info("Sem dados.")
+        if dfba.empty:
+            st.info("Sem dados.")
         else:
             dfba["Tipo"] = dfba["kind"].map({"income":"Receita","expense":"Despesa"})
             dfba["Categoria"] = dfba["category_name"]
-            dfba["Orçado"] = dfba["budget"].fillna(0); dfba["Realizado"] = dfba["actual"].fillna(0)
+            dfba["Orçado"] = dfba["budget"].fillna(0)
+            dfba["Realizado"] = dfba["actual"].fillna(0)
             st.dataframe(dfba[["Categoria","Tipo","Orçado","Realizado"]], use_container_width=True, hide_index=True)
-
-    # ————— Cartão —————
-    with st.expander("🏦 Cartões"):
-        with st.form("novo_cartao"):
-            c1,c2,c3,c4 = st.columns(4)
-            with c1: nm = st.text_input("Nome do cartão")
-            with c2: lim = st.number_input("Limite (R$)", min_value=0.0, step=100.0)
-            with c3: closing = st.number_input("Fechamento (1-28)", min_value=1, max_value=28, value=5)
-            with c4: due = st.number_input("Vencimento (1-28)", min_value=1, max_value=28, value=15)
-            okc = st.form_submit_button("Salvar cartão")
-            if okc and nm.strip():
-                try:
-                    sb.table("credit_cards").insert({
-                        "household_id": HOUSEHOLD_ID, "name": nm.strip(),
-                        "limit_amount": lim, "closing_day": int(closing), "due_day": int(due),
-                        "is_active": True, "created_by": user.id
-                    }).execute()
-                    st.toast("✅ Cartão salvo!", icon="✅"); st.cache_data.clear(); st.rerun()
-                except Exception as e:
-                    st.error(f"Falha: {e}")
-        cards = fetch_cards(False)
-        limits = fetch_card_limits(); limap = {x["id"]: x for x in limits}
-        if not cards: st.info("Nenhum cartão cadastrado.")
-        else:
-            for c in cards:
-                colA,colB,colC,colD = st.columns([4,2,2,2])
-                with colA: st.write(f"💳 **{c['name']}**")
-                with colB: st.write(f"Limite: {to_brl(c['limit_amount'])}")
-                with colC: st.write("Disponível: " + to_brl(limap.get(c["id"],{}).get("available_limit", c["limit_amount"])))
-                with colD:
-                    if c["is_active"]:
-                        if st.button("Desativar", key=f"card_d_{c['id']}"):
-                            sb.table("credit_cards").update({"is_active": False}).eq("id", c["id"]).execute(); st.cache_data.clear(); st.rerun()
-                    else:
-                        if st.button("Ativar", key=f"card_a_{c['id']}"):
-                            sb.table("credit_cards").update({"is_active": True}).eq("id", c["id"]).execute(); st.cache_data.clear(); st.rerun()
 
     # ————— Fluxo de caixa (previsto) —————
     with st.expander("📈 Fluxo de caixa (previsto)"):
@@ -398,7 +432,8 @@ if section == "💼 Financeiro":
         with f1: ini = st.date_input("Início", value=date.today().replace(day=1), key="fx_ini")
         with f2: fim = st.date_input("Fim", value=date.today()+timedelta(days=60), key="fx_fim")
         txx = fetch_tx_due(ini, fim)
-        if not txx: st.info("Sem previstos no período.")
+        if not txx:
+            st.info("Sem previstos no período.")
         else:
             df = pd.DataFrame(txx)
             def eff(r):
@@ -406,7 +441,7 @@ if section == "💼 Financeiro":
                 return v if r["type"]=="income" else -v
             df["eff"] = df.apply(eff, axis=1)
             df["Quando"] = pd.to_datetime(df["due_date"].fillna(df["occurred_at"])).dt.date
-            tot = df.groupby("Quando")["eff"].sum().reset_index()
+            tot = df.groupby("Quando", as_index=False)["eff"].sum()
             st.line_chart(tot, x="Quando", y="eff")
             cta = df[df["type"]=="income"]["eff"].sum()
             ctd = -df[df["type"]=="expense"]["eff"].sum()
@@ -416,6 +451,7 @@ if section == "💼 Financeiro":
 # ====== Administração ======
 if section == "🧰 Administração":
     tabs = st.tabs(["Membros","Contas","Categorias","Cartões"])
+
     # Membros
     with tabs[0]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -427,27 +463,34 @@ if section == "🧰 Administração":
                     "household_id": HOUSEHOLD_ID,"user_id": user.id,"display_name": nm.strip(),"role":"owner"
                 }, on_conflict="household_id,user_id").execute()
                 st.toast("✅ Salvo!", icon="✅"); st.cache_data.clear(); st.rerun()
-            except Exception as e: st.error(str(e))
+            except Exception as e:
+                st.error(str(e))
         mems = fetch_members()
         if mems:
             chips = " ".join([f'<span class="badge">👤 {m["display_name"]}{" · owner" if m["role"]=="owner" else ""}</span>' for m in mems])
             st.markdown(chips, unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
+
     # Contas
     with tabs[1]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
         st.subheader("Contas")
-        an = st.text_input("Nome"); at = st.selectbox("Tipo", ["checking","savings","wallet","credit"])
+        an = st.text_input("Nome")
+        at = st.selectbox("Tipo", ["checking","savings","wallet","credit"])
         ob = st.number_input("Saldo inicial", min_value=0.0, step=50.0)
         if st.button("Salvar conta"):
             try:
-                sb.table("accounts").insert({"household_id": HOUSEHOLD_ID,"name": an.strip(),"type":at,"opening_balance":ob,"currency":"BRL","is_active":True}).execute()
+                sb.table("accounts").insert({
+                    "household_id": HOUSEHOLD_ID,"name": an.strip(),"type":at,"opening_balance":float(ob),"currency":"BRL","is_active":True
+                }).execute()
                 st.toast("✅ Conta salva!", icon="✅"); st.cache_data.clear(); st.rerun()
-            except Exception as e: st.error(str(e))
+            except Exception as e:
+                st.error(str(e))
         accs = fetch_accounts(False)
-        for a in accs or []:
+        for a in (accs or []):
             st.write(("✅ " if a["is_active"] else "❌ ") + a["name"])
         st.markdown('</div>', unsafe_allow_html=True)
+
     # Categorias
     with tabs[2]:
         st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -456,9 +499,12 @@ if section == "🧰 Administração":
         ck = st.selectbox("Tipo", ["income","expense"], format_func=lambda k: {"income":"Receita","expense":"Despesa"}[k])
         if st.button("Salvar categoria"):
             try:
-                sb.table("categories").insert({"household_id": HOUSEHOLD_ID,"name": cn.strip(),"kind": ck}).execute()
+                sb.table("categories").insert({
+                    "household_id": HOUSEHOLD_ID,"name": cn.strip(),"kind": ck
+                }).execute()
                 st.toast("✅ Categoria salva!", icon="✅"); st.cache_data.clear(); st.rerun()
-            except Exception as e: st.error(str(e))
+            except Exception as e:
+                st.error(str(e))
         cats = fetch_categories()
         if cats:
             chips_inc = " ".join([f'<span class="badge green">#{c["name"]}</span>' for c in cats if c["kind"]=="income"])
@@ -466,9 +512,49 @@ if section == "🧰 Administração":
             st.markdown("**Receitas**"); st.markdown(chips_inc or "_(vazio)_", unsafe_allow_html=True)
             st.markdown("**Despesas**"); st.markdown(chips_exp or "_(vazio)_", unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
-    # Cartões (atalho idem Financeiro)
+
+    # Cartões (agora exclusivamente aqui)
     with tabs[3]:
-        st.info("Gerencie cartões também na seção Financeiro › Cartão.")
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.subheader("Cartões")
+        with st.form("novo_cartao_admin"):
+            c1,c2,c3,c4 = st.columns(4)
+            with c1: nm = st.text_input("Nome do cartão")
+            with c2: lim = st.number_input("Limite (R$)", min_value=0.0, step=100.0)
+            with c3: closing = st.number_input("Fechamento (1-28)", min_value=1, max_value=28, value=5)
+            with c4: due = st.number_input("Vencimento (1-28)", min_value=1, max_value=28, value=15)
+            okc = st.form_submit_button("Salvar cartão")
+            if okc and nm.strip():
+                try:
+                    sb.table("credit_cards").insert({
+                        "household_id": HOUSEHOLD_ID, "name": nm.strip(),
+                        "limit_amount": float(lim), "closing_day": int(closing), "due_day": int(due),
+                        "is_active": True, "created_by": user.id
+                    }).execute()
+                    st.toast("✅ Cartão salvo!", icon="✅"); st.cache_data.clear(); st.rerun()
+                except Exception as e:
+                    st.error(f"Falha: {e}")
+
+        cards = fetch_cards(False)
+        limits = fetch_card_limits(); limap = {x.get("id"): x for x in (limits or [])}
+        if not cards:
+            st.info("Nenhum cartão cadastrado.")
+        else:
+            for c in cards:
+                colA,colB,colC,colD = st.columns([4,2,2,2])
+                with colA: st.write(f"💳 **{c.get('name','(sem nome)')}** · Fechamento {c.get('closing_day')}/ Venc {c.get('due_day')}")
+                with colB: st.write(f"Limite: {to_brl(c.get('limit_amount'))}")
+                with colC: st.write("Disponível: " + to_brl(limap.get(c["id"],{}).get("available_limit", c.get("limit_amount",0))))
+                with colD:
+                    if c.get("is_active"):
+                        if st.button("Desativar", key=f"card_d_{c['id']}"):
+                            sb.table("credit_cards").update({"is_active": False}).eq("id", c["id"]).execute()
+                            st.cache_data.clear(); st.rerun()
+                    else:
+                        if st.button("Ativar", key=f"card_a_{c['id']}"):
+                            sb.table("credit_cards").update({"is_active": True}).eq("id", c["id"]).execute()
+                            st.cache_data.clear(); st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
 # ====== Dashboards ======
 if section == "📊 Dashboards":
@@ -480,17 +566,23 @@ if section == "📊 Dashboards":
         fim = st.date_input("Fim", value=date.today())
         tx = fetch_tx(ini, fim)
         mems = fetch_members(); cats = fetch_categories()
-        if not tx: st.info("Sem lançamentos.")
+        if not tx:
+            st.info("Sem lançamentos.")
         else:
             df = pd.DataFrame(tx)
-            mem_map = {m["id"]: m["display_name"] for m in mems}
-            cat_map = {c["id"]: c["name"] for c in cats}
-            df["valor_eff"] = df.apply(lambda r: (r.get("paid_amount") if r.get("is_paid") else r.get("planned_amount") or r.get("amount") or 0)
-                                                 * (1 if r["type"]=="income" else -1), axis=1)
+            mem_map = {m["id"]: m["display_name"] for m in (mems or [])}
+            cat_map = {c["id"]: c["name"] for c in (cats or [])}
+            df["valor_eff"] = df.apply(
+                lambda r: ((r.get("paid_amount") if r.get("is_paid") else (r.get("planned_amount") or r.get("amount") or 0.0)))
+                          * (1 if r["type"]=="income" else -1),
+                axis=1
+            )
             df["Membro"] = df["member_id"].map(mem_map).fillna("—")
             df["Categoria"] = df["category_id"].map(cat_map).fillna("—")
-            st.markdown("#### Por membro"); st.bar_chart(df.groupby("Membro")["valor_eff"].sum().reset_index(), x="Membro", y="valor_eff")
-            st.markdown("#### Por categoria"); st.bar_chart(df.groupby("Categoria")["valor_eff"].sum().reset_index(), x="Categoria", y="valor_eff")
+            st.markdown("#### Por membro")
+            st.bar_chart(df.groupby("Membro", as_index=False)["valor_eff"].sum(), x="Membro", y="valor_eff")
+            st.markdown("#### Por categoria")
+            st.bar_chart(df.groupby("Categoria", as_index=False)["valor_eff"].sum(), x="Categoria", y="valor_eff")
         st.markdown('</div>', unsafe_allow_html=True)
     with tabs[1]:
         st.info("Use também o Financeiro › Fluxo de caixa (previsto) para ver o futuro por data de vencimento.")
