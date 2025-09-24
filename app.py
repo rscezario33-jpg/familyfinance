@@ -44,32 +44,39 @@ st.markdown("""
 .st-emotion-cache-zt5igj { /* Esconde o botão "Made with Streamlit" */
     visibility: hidden;
 }
-div.stSpinner > div {
-    text-align: center;
-    color: var(--sb-fg);
-}
-div.stSpinner > div > span {
-    color: var(--sb-fg);
-}
+div.stSpinner > div { text-align: center; color: var(--sb-fg); }
+div.stSpinner > div > span { color: var(--sb-fg); }
 
-/* Sidebar fundo azul escuro */
+/* Sidebar base */
 section[data-testid="stSidebar"] > div {
     background: var(--sb-bg) !important;
     color: var(--sb-fg) !important;
     box-shadow: 2px 0 5px rgba(0,0,0,0.1);
+    position: relative; /* permite posicionar a logo */
 }
 
-/* Torna o bloco raiz da sidebar um flex column de altura total */
+/* Layout coluna full-height */
 section[data-testid="stSidebar"] > div > div.stVerticalBlock:first-of-type{
   display:flex; flex-direction:column; min-height:100vh;
 }
 
-/* ---------- LOGO no topo (sempre) ---------- */
+/* ---------- LOGO fixa acima do menu ---------- */
 section[data-testid="stSidebar"] img:first-of-type{
-  order:1;
-  display:block; margin:14px auto 10px auto;
-  max-width: 78%;
+  position:absolute;
+  top:14px; left:50%; transform:translateX(-50%);
+  max-width:78%;
+  margin:0;
+  display:block;
   filter: drop-shadow(0 2px 6px rgba(0,0,0,.25));
+  z-index:5;
+}
+
+/* “Respiro” para nav descer abaixo da logo */
+section[data-testid="stSidebar"] div[data-testid="stSidebarNav"]{
+  order:3; flex:1 1 auto;
+  display:flex; flex-direction:column; justify-content:center;
+  padding:6px 10px;
+  margin-top:110px; /* ajuste fino conforme altura da logo */
 }
 
 /* Separadores finos (estilo imagem 2) */
@@ -80,32 +87,22 @@ section[data-testid="stSidebar"] img:first-of-type{
   padding-top:8px;
 }
 
-/* Contraste nos textos da sidebar */
+/* Tipografia da sidebar */
 section[data-testid="stSidebar"] label,
 section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] > div,
 section[data-testid="stSidebar"] .stMarkdown,
 section[data-testid="stSidebar"] p,
 section[data-testid="stSidebar"] span,
-section[data-testid="stSidebar"] a {
-    color: var(--sb-fg) !important;
-}
+section[data-testid="stSidebar"] a { color: var(--sb-fg) !important; }
 
-/* ---------- NAV nativa centralizada em “cards” ---------- */
-section[data-testid="stSidebar"] div[data-testid="stSidebarNav"]{
-  order:3; flex:1 1 auto;
-  display:flex; flex-direction:column; justify-content:center;
-  padding:6px 10px;
-}
+/* ---------- NAV em “cards” ---------- */
 section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] ul{
   list-style:none; margin:0; padding:0;
 }
 section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] li{ margin:10px 0; }
-
-/* Link = card arredondado com borda sutil (imagem 2) */
 section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] li a{
   display:flex; align-items:center; gap:10px;
-  padding:14px 16px;
-  margin:0 2px;
+  padding:14px 16px; margin:0 2px;
   color:var(--sb-fg) !important; text-decoration:none;
   background:var(--card);
   border:1px solid var(--line);
@@ -119,8 +116,7 @@ section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] li a:hover{
   border-color: rgba(255,255,255,.18);
   transform: translateY(-1px);
 }
-
-/* Estilo para link ATIVO — usa aria-current (mais robusto) */
+/* Ativo (robusto via aria-current) */
 section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] li a[aria-current="page"]{
   background:linear-gradient(180deg, var(--brand) 0%, #11b7ff 100%);
   color:#001523 !important;
@@ -128,16 +124,11 @@ section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] li a[aria-curre
   box-shadow: 0 6px 14px rgba(0,165,233,.35);
 }
 
-/* Esconde o cabeçalho do expander se as páginas estiverem agrupadas (opcional) */
-section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] .stExpander > div > div:first-child {
-    display: none;
-}
-/* Remove padding extra de expander */
-section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] .stExpander div[data-testid="stVerticalBlock"] {
-    padding: 0;
-}
+/* Expanders agrupados: remove cabeçalho/padding */
+section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] .stExpander > div > div:first-child{ display:none; }
+section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] .stExpander div[data-testid="stVerticalBlock"]{ padding:0; }
 
-/* ---------- Bloco “Logado:” (abaixo do menu) ---------- */
+/* ---------- Bloco “Logado:” ---------- */
 .user-email-display{
   order:4;
   margin:8px 16px 10px 16px;
@@ -146,193 +137,83 @@ section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] .stExpander div
   border-top:1px solid var(--line);
 }
 
-/* ---------- Botão Sair (formato pílula) ---------- */
-section[data-testid="stSidebar"] .stButton:last-of-type button {
-    order: 6;
-    width: calc(100% - 32px);
-    margin: 12px 16px 6px 16px;
-    background: var(--danger);
-    border-color: var(--danger);
-    color:#fff;
-    border-radius:14px;
-    padding:10px 0;
-    font-weight:700;
-    transition: all 0.18s ease-in-out;
-    box-shadow: 0 4px 10px rgba(0,0,0,.2);
+/* ---------- Botão Sair corrigido (wrapper .ff-logout) ---------- */
+.ff-logout .stButton>button{
+  width:100%;
+  border-radius:14px;
+  background:var(--danger);
+  border:1px solid var(--danger);
+  color:#fff; font-weight:700;
+  padding:10px 0;
+  transition:all .18s ease-in-out;
+  box-shadow: 0 4px 10px rgba(0,0,0,.2);
 }
-section[data-testid="stSidebar"] .stButton:last-of-type button:hover {
-    background: var(--danger-700);
-    border-color: var(--danger-700);
-    transform: translateY(-1px);
+.ff-logout .stButton>button:hover{
+  background:var(--danger-700); border-color:var(--danger-700); transform:translateY(-1px);
 }
 
-/* ---------- Rodapé fixo “Powered by” ---------- */
-section[data-testid="stSidebar"] .small { 
-    order: 8; 
-    text-align:center; 
-    opacity:.9;
-    margin: 6px 0 2px 0;
+/* Linha antes do rodapé */
+section[data-testid="stSidebar"] .sidebar-group:nth-of-type(4){ order:7; }
+
+/* ---------- Rodapé fixo ---------- */
+section[data-testid="stSidebar"] .small{
+  order:8; text-align:center; opacity:.9;
+  margin: 6px 0 2px 0;
 }
-section[data-testid="stSidebar"] img[src*="logo_automaGO"] { 
-    order: 9; 
-    display:block; 
-    margin: 6px auto 14px auto; 
-    max-width: 46%;
-    filter: drop-shadow(0 1px 3px rgba(0,0,0,.25));
+section[data-testid="stSidebar"] img[src*="logo_automaGO"]{
+  order:9; display:block; margin:6px auto 14px auto;
+  max-width:46%;
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,.25));
 }
 
 /* Inputs/botões gerais (mantidos) */
-.stButton>button, .stDownloadButton>button {
-    border-radius:10px;
-    padding:.55rem .9rem;
-    font-weight:600;
-    border:1px solid var(--brand);
-    background:var(--brand);
-    color:white;
-    transition: all 0.2s ease-in-out;
+.stButton>button, .stDownloadButton>button{
+  border-radius:10px; padding:.55rem .9rem; font-weight:600;
+  border:1px solid var(--brand); background:var(--brand); color:white;
+  transition:all .2s ease-in-out;
 }
-.stButton>button:hover, .stDownloadButton>button:hover {
-    transform: translateY(-1px);
-    background:var(--brand-700);
-    border-color:var(--brand-700);
-    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+.stButton>button:hover, .stDownloadButton>button:hover{
+  transform: translateY(-1px);
+  background:var(--brand-700); border-color:var(--brand-700);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.2);
 }
-.stSelectbox div[data-baseweb="select"] > div, .stTextInput input, .stNumberInput input, .stDateInput input {
-    border-radius:10px !important;
-    border:1px solid #e2e8f0;
+.stSelectbox div[data-baseweb="select"] > div, .stTextInput input, .stNumberInput input, .stDateInput input{
+  border-radius:10px !important; border:1px solid #e2e8f0;
 }
 
 /* Cards e badges (mantidos) */
-.card {
-    background: linear-gradient(180deg,#fff 0%,#f8fafc 100%);
-    border:1px solid #e2e8f0;
-    border-radius:16px;
-    padding:16px 18px;
-    box-shadow:0 6px 20px rgba(0,0,0,.06);
-    margin-bottom:12px;
-}
-.badge {
-    display:inline-flex;
-    align-items:center;
-    gap:.5rem;
-    background:#eef6ff;
-    color:#0369a1;
-    border:1px solid #bfdbfe;
-    padding:.35rem .6rem;
-    border-radius:999px;
-    font-weight:600;
-    margin:4px 6px 0 0;
-}
+.card{ background:linear-gradient(180deg,#fff 0%,#f8fafc 100%); border:1px solid #e2e8f0; border-radius:16px; padding:16px 18px; box-shadow:0 6px 20px rgba(0,0,0,.06); margin-bottom:12px; }
+.badge{ display:inline-flex; align-items:center; gap:.5rem; background:#eef6ff; color:#0369a1; border:1px solid #bfdbfe; padding:.35rem .6rem; border-radius:999px; font-weight:600; margin:4px 6px 0 0; }
 .badge.red{background:#fff1f2;color:#9f1239;border-color:#fecdd3;}
 .badge.green{background:#ecfdf5;color:#065f46;border-color:#bbf7d0;}
-.small { font-size:.85rem; opacity:.75; }
+.small{ font-size:.85rem; opacity:.75; }
 
-/* Estilo para a tela de boas-vindas (pré-login) */
-.welcome-container {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    min-height: 100vh;
-    text-align: center;
-    padding: 20px;
-    background: url("https://images.unsplash.com/photo-1543286386-77942a635930?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=1974&q=80") no-repeat center center fixed;
-    background-size: cover;
-    color: white;
-    text-shadow: 1px 1px 3px rgba(0,0,0,0.5);
+/* Boas-vindas (mantido) */
+.welcome-container{
+  display:flex; flex-direction:column; align-items:center; justify-content:center;
+  min-height:100vh; text-align:center; padding:20px;
+  background:url("https://images.unsplash.com/photo-1543286386-77942a635930?ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D&auto=format&fit=crop&w=1974&q=80") no-repeat center center fixed;
+  background-size:cover; color:white; text-shadow:1px 1px 3px rgba(0,0,0,0.5);
 }
-.welcome-overlay {
-    background-color: rgba(0, 0, 0, 0.5);
-    padding: 40px;
-    border-radius: 15px;
-    max-width: 800px;
-}
-.welcome-container h1 {
-    font-size: 3.5rem;
-    color: white;
-    margin-bottom: 20px;
-    font-weight: 700;
-}
-.welcome-container p {
-    font-size: 1.5rem;
-    color: #f0f6ff;
-    margin-bottom: 30px;
-    line-height: 1.6;
-}
-.welcome-container img {
-    max-width: 300px;
-    height: auto;
-    margin-top: 20px;
-    filter: drop-shadow(0 0 5px rgba(0,0,0,0.5));
-}
-.welcome-container .stButton > button {
-    background: var(--brand);
-    border: none;
-    color: white;
-    padding: 10px 25px;
-    font-size: 1.2rem;
-    border-radius: 8px;
-    transition: all 0.3s ease;
-}
-.welcome-container .stButton > button:hover {
-    background: var(--brand-700);
-    transform: translateY(-2px);
-}
+.welcome-overlay{ background:rgba(0,0,0,0.5); padding:40px; border-radius:15px; max-width:800px; }
+.welcome-container h1{ font-size:3.5rem; color:white; margin-bottom:20px; font-weight:700; }
+.welcome-container p{ font-size:1.5rem; color:#f0f6ff; margin-bottom:30px; line-height:1.6; }
+.welcome-container img{ max-width:300px; height:auto; margin-top:20px; filter:drop-shadow(0 0 5px rgba(0,0,0,0.5)); }
+.welcome-container .stButton > button{ background:var(--brand); border:none; color:white; padding:10px 25px; font-size:1.2rem; border-radius:8px; transition:all .3s ease; }
+.welcome-container .stButton > button:hover{ background:var(--brand-700); transform:translateY(-2px); }
 
-/* Estilos do Dashboard Pós-login */
-.dashboard-title {
-    font-size: 2.2rem;
-    font-weight: 700;
-    color: #0b2038;
-    margin-bottom: 25px;
-}
-.metric-box {
-    background: linear-gradient(145deg, #ffffff, #f0f2f5);
-    border-radius: 12px;
-    padding: 20px;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.08);
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    min-height: 120px;
-    margin-bottom: 15px;
-    border: 1px solid #e0e0e0;
-    transition: all 0.2s ease-in-out;
-}
-.metric-box:hover {
-    transform: translateY(-3px);
-    box-shadow: 0 6px 20px rgba(0,0,0,0.12);
-}
-.metric-box h3 {
-    font-size: 1.1rem;
-    color: #334155;
-    margin-bottom: 10px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-.metric-box .value {
-    font-size: 2.2rem;
-    font-weight: 700;
-    color: #0b2038;
-}
-.metric-box .delta {
-    font-size: 0.9rem;
-    color: #64748b;
-}
-.chart-container {
-    background: linear-gradient(145deg, #ffffff, #f0f2f5);
-    border-radius: 12px;
-    padding: 20px;
-    box-shadow: 0 4px 15px rgba(0,0,0,0.08);
-    margin-bottom: 25px;
-    border: 1px solid #e0e0e0;
-}
-.chart-container h2 {
-    font-size: 1.5rem;
-    color: #0b2038;
-    margin-bottom: 15px;
-}
+/* Dashboard (mantido) */
+.dashboard-title{ font-size:2.2rem; font-weight:700; color:#0b2038; margin-bottom:25px; }
+.metric-box{ background:linear-gradient(145deg,#ffffff,#f0f2f5); border-radius:12px; padding:20px; box-shadow:0 4px 15px rgba(0,0,0,0.08); display:flex; flex-direction:column; justify-content:space-between; min-height:120px; margin-bottom:15px; border:1px solid #e0e0e0; transition:all .2s ease-in-out; }
+.metric-box:hover{ transform:translateY(-3px); box-shadow:0 6px 20px rgba(0,0,0,0.12); }
+.metric-box h3{ font-size:1.1rem; color:#334155; margin-bottom:10px; display:flex; align-items:center; gap:8px; }
+.metric-box .value{ font-size:2.2rem; font-weight:700; color:#0b2038; }
+.metric-box .delta{ font-size:.9rem; color:#64748b; }
+.chart-container{ background:linear-gradient(145deg,#ffffff,#f0f2f5); border-radius:12px; padding:20px; box-shadow:0 4px 15px rgba(0,0,0,0.08); margin-bottom:25px; border:1px solid #e0e0e0; }
+.chart-container h2{ font-size:1.5rem; color:#0b2038; margin-bottom:15px; }
+
+/* Esconde nav se não autenticado */
+body:not(:has(.user-email-display)) div[data-testid="stSidebarNav"]{ display:none !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -412,20 +293,22 @@ with st.sidebar:
     # Se autenticado:
     user = _user()
     st.session_state.user = user # Armazena o objeto user na sessão
-    # Usando uma div com classe para o email do usuário para facilitar o CSS
     st.markdown(f'<div class="user-email-display">Logado: {user.email if user else ""}</div>', unsafe_allow_html=True)
     st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
 
-    # A navegação de páginas nativa do Streamlit será renderizada aqui
-    # e posicionada via CSS. Não precisamos de st.radio.
+    # (A navegação nativa aparece aqui automaticamente; posicionada via CSS)
 
-    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True) # Divisor antes do botão Sair
-    # Botão Sair - Usamos um key para poder selecionar com CSS e aplicar o estilo
+    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)  # Linha antes do sair
+
+    # Wrapper para estilizar o botão sair sem afetar outros
+    st.markdown('<div class="ff-logout">', unsafe_allow_html=True)
     if st.button("Sair", key="sidebar_logout_button"):
         _signout()
-    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True) # Divisor após o botão Sair
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    # Logo AutomaGO no rodapé, centralizada
+    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)  # Linha depois do sair
+
+    # Rodapé
     st.markdown('<div class="small" style="text-align:center;opacity:.9;">Powered by</div>', unsafe_allow_html=True)
     st.image("assets/logo_automaGO.png", width=80)
 
