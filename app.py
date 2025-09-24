@@ -1,4 +1,4 @@
-# app.py — Family Finance v8.5.0 # (Sidebar com navegação nativa repositionada e estilizada)
+# app.py — Family Finance v8.6.0 # (Sidebar com navegação nativa totalmente estilizada e com CSS Vars)
 from __future__ import annotations
 from datetime import date, datetime, timedelta
 import uuid
@@ -27,16 +27,26 @@ st.markdown("""
    Vars (ajuste rápido de tema)
 ========================= */
 :root{
-  --sb-bg: #0b2038;        /* Fundo */
-  --sb-fg: #eaf2ff;        /* Texto */
-  --line: rgba(255,255,255,.12);
-  --card: rgba(255,255,255,.06);
-  --card-hov: rgba(255,255,255,.10);
-  --brand: #0ea5e9;
-  --brand-700:#0284c7;
-  --danger:#ef4444;
-  --danger-700:#dc2626;
-  --radius: 14px;
+  --sb-bg: #0b2038;        /* Sidebar Fundo */
+  --sb-fg: #eaf2ff;        /* Sidebar Texto */
+  --line: rgba(255,255,255,.12); /* Divisor da Sidebar */
+  --card: rgba(255,255,255,.06); /* Fundo dos Cards de navegação */
+  --card-hov: rgba(255,255,255,.10); /* Fundo dos Cards de navegação (hover) */
+  --brand: #0ea5e9;       /* Cor primária (azul) */
+  --brand-700:#0284c7;    /* Cor primária (azul escuro) */
+  --danger:#ef4444;       /* Cor de perigo (vermelho) */
+  --danger-700:#dc2626;   /* Cor de perigo (vermelho escuro) */
+  --radius: 14px;         /* Raio da borda */
+
+  /* Cores para o Dashboard */
+  --dash-bg-card: linear-gradient(145deg, #ffffff, #f0f2f5);
+  --dash-border-card: #e0e0e0;
+  --dash-shadow-card: 0 4px 15px rgba(0,0,0,0.08);
+  --dash-text-dark: #0b2038;
+  --dash-text-medium: #334155;
+  --dash-text-light: #64748b;
+  --dash-success: #22c55e;
+  --dash-error: #ef4444;
 }
 
 /* Streamlit padrão */
@@ -44,39 +54,68 @@ st.markdown("""
 div.stSpinner > div { text-align: center; color: var(--sb-fg); }
 div.stSpinner > div > span { color: var(--sb-fg); }
 
-/* ===== Sidebar base ===== */
-section[data-testid="stSidebar"] > div{
+/* =====================
+   Sidebar Base Styling
+   ===================== */
+section[data-testid="stSidebar"] > div {
   background: var(--sb-bg) !important;
   color: var(--sb-fg) !important;
   box-shadow: 2px 0 5px rgba(0,0,0,0.1);
   position: relative; /* permite a logo absoluta */
+  padding-top: 0; /* Remove padding top para a logo ser absoluta */
 }
 
-/* Layout coluna full-height */
-section[data-testid="stSidebar"] > div > div.stVerticalBlock:first-of-type{
+/* Layout coluna full-height e reordenação com flexbox */
+section[data-testid="stSidebar"] > div > div.stVerticalBlock:first-of-type {
   display:flex; flex-direction:column; min-height:100vh;
 }
 
-/* ===== LOGO fixa acima do menu ===== */
-section[data-testid="stSidebar"] img:first-of-type{
+/* Logo Family Finance (topo, fixa e centralizada) */
+section[data-testid="stSidebar"] img[src*="logo_family_finance"] {
   position:absolute;
   top:14px; left:50%; transform:translateX(-50%);
-  max-width:78%;
+  max-width:78%; /* Ajusta o tamanho da logo */
   margin:0;
   display:block;
   filter: drop-shadow(0 2px 6px rgba(0,0,0,.25));
-  z-index:5;
+  z-index:5; /* Garante que fique acima de outros elementos */
+  order: 1; /* Força a ordem visual */
 }
 
-/* ===== NAV nativa centralizada em “cards” ===== */
-section[data-testid="stSidebar"] div[data-testid="stSidebarNav"]{
-  order:3; flex:1 1 auto;
-  display:flex; flex-direction:column; justify-content:center;
+/* Divisores na sidebar */
+.sidebar-group {
+  border-top:1px solid var(--line);
+  margin:12px 12px 6px 12px;
+  padding-top:8px;
+}
+/* Reordenação dos divisores */
+section[data-testid="stSidebar"] .sidebar-group:nth-of-type(1) { order: 2; margin-top: 100px; } /* Ajusta para começar após a logo */
+section[data-testid="stSidebar"] .sidebar-group:nth-of-type(2) { order: 4; }
+section[data-testid="stSidebar"] .sidebar-group:nth-of-type(3) { order: 6; }
+section[data-testid="stSidebar"] .sidebar-group:nth-of-type(4) { order: 8; }
+
+
+/* Bloco "Logado:" (email do usuário) */
+.user-email-display {
+  order: 3; /* Após o primeiro divisor */
+  margin:8px 16px 10px 16px;
+  padding:8px 4px 0 4px;
+  font-size:.92rem; opacity:.95;
+  color: var(--sb-fg);
+  text-align: center;
+}
+
+/* ==============================
+   Navegação Nativa Centralizada
+   ============================== */
+section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] {
+  order: 5; /* Após o email do usuário e seu divisor */
+  flex:1 1 auto; /* Ocupa o espaço restante verticalmente */
+  display:flex; flex-direction:column; justify-content:center; /* Centraliza verticalmente o menu */
   padding:6px 10px;
-  margin-top:120px; /* empurra o menu abaixo da logo (ajuste fino conforme altura da sua logo) */
 }
 section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] ul{ list-style:none; margin:0; padding:0; }
-section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] li{ margin:10px 0; }
+section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] li{ margin:6px 0; } /* Margem entre os itens do menu */
 
 section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] li a{
   display:flex; align-items:center; gap:10px;
@@ -94,43 +133,28 @@ section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] li a:hover{
   border-color: rgba(255,255,255,.18);
   transform: translateY(-1px);
 }
-/* Link ativo robusto (aria-current) */
+/* Link ativo robusto (aria-current="page") */
 section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] li a[aria-current="page"]{
   background:linear-gradient(180deg, var(--brand) 0%, #11b7ff 100%);
-  color:#001523 !important;
+  color:#001523 !important; /* Cor de texto para links ativos, forte contraste */
   border-color: transparent;
   box-shadow: 0 6px 14px rgba(0,165,233,.35);
 }
 
-/* ===== Separadores finos (como imagem 2) ===== */
-.sidebar-group{
-  border-top:1px solid var(--line);
-  margin:12px 12px 6px 12px;
-  padding-top:8px;
-}
+/* Esconde o cabeçalho do expander se as páginas estiverem agrupadas (opcional) */
+section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] .stExpander > div > div:first-child { display: none; }
+/* Remove padding extra de expander */
+section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] .stExpander div[data-testid="stVerticalBlock"] { padding: 0; }
 
-/* Tipografia dentro da sidebar */
-section[data-testid="stSidebar"] label,
-section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] > div,
-section[data-testid="stSidebar"] .stMarkdown,
-section[data-testid="stSidebar"] p,
-section[data-testid="stSidebar"] span,
-section[data-testid="stSidebar"] a { color: var(--sb-fg) !important; }
-
-/* ===== Bloco “Logado:” ===== */
-.user-email-display{
-  margin:8px 16px 10px 16px;
-  padding:8px 4px 0 4px;
-  font-size:.92rem; opacity:.95;
-  border-top:1px solid var(--line);
-}
-
-/* ===== Botão SAIR (força o último botão da sidebar) ===== */
+/* =====================
+   Botão SAIR (footer)
+   ===================== */
 section[data-testid="stSidebar"] .stButton:last-of-type button{
+  order: 7; /* Força a ordem visual */
   display:block !important;
   width: calc(100% - 32px) !important;
-  margin: 16px 16px 16px 16px !important;
-  border-radius:14px !important;
+  margin: 8px 16px 2px 16px !important;
+  border-radius:var(--radius) !important;
   background:var(--danger) !important;
   border:1px solid var(--danger) !important;
   color:#fff !important;
@@ -142,17 +166,27 @@ section[data-testid="stSidebar"] .stButton:last-of-type button:hover{
   background:var(--danger-700) !important; border-color:var(--danger-700) !important; transform:translateY(-1px);
 }
 
-/* ===== Rodapé “Powered by” ===== */
+/* =====================
+   Rodapé "Powered by"
+   ===================== */
 section[data-testid="stSidebar"] .small{ 
+  order: 9; /* Força a ordem visual */
   text-align:center; opacity:.9; margin: 6px 0 2px 0;
+  color: var(--sb-fg);
 }
 section[data-testid="stSidebar"] img[src*="logo_automaGO"]{
+  order: 10; /* Força a ordem visual */
   display:block; margin:6px auto 14px auto;
-  max-width:46%;
+  max-width:46%; /* Tamanho menor para a logo de rodapé */
   filter: drop-shadow(0 1px 3px rgba(0,0,0,.25));
 }
 
-/* ===== Inputs/botões gerais (mantidos) ===== */
+/* Esconde nav se não autenticado */
+body:not(:has(.user-email-display)) div[data-testid="stSidebarNav"]{ display:none !important; }
+
+/* =====================
+   Inputs/botões gerais (fora da sidebar)
+   ===================== */
 .stButton>button, .stDownloadButton>button{
   border-radius:10px; padding:.55rem .9rem; font-weight:600;
   border:1px solid var(--brand); background:var(--brand); color:white;
@@ -167,9 +201,19 @@ section[data-testid="stSidebar"] img[src*="logo_automaGO"]{
   border-radius:10px !important; border:1px solid #e2e8f0;
 }
 
-/* ===== Cards/badges, Welcome e Dashboard (mantidos) ===== */
-.card{ background:linear-gradient(180deg,#fff 0%,#f8fafc 100%); border:1px solid #e2e8f0; border-radius:16px; padding:16px 18px; box-shadow:0 6px 20px rgba(0,0,0,.06); margin-bottom:12px; }
-.badge{ display:inline-flex; align-items:center; gap:.5rem; background:#eef6ff; color:#0369a1; border:1px solid #bfdbfe; padding:.35rem .6rem; border-radius:999px; font-weight:600; margin:4px 6px 0 0; }
+/* =====================
+   Cards, Welcome e Dashboard (atualizado com CSS Vars)
+   ===================== */
+.card{
+  background:var(--dash-bg-card); border:1px solid var(--dash-border-card);
+  border-radius:var(--radius); padding:16px 18px;
+  box-shadow:0 6px 20px rgba(0,0,0,.06); margin-bottom:12px;
+}
+.badge{
+  display:inline-flex; align-items:center; gap:.5rem;
+  background:#eef6ff; color:#0369a1; border:1px solid #bfdbfe;
+  padding:.35rem .6rem; border-radius:999px; font-weight:600; margin:4px 6px 0 0;
+}
 .badge.red{background:#fff1f2;color:#9f1239;border-color:#fecdd3;}
 .badge.green{background:#ecfdf5;color:#065f46;border-color:#bbf7d0;}
 .small { font-size:.85rem; opacity:.75; }
@@ -187,17 +231,25 @@ section[data-testid="stSidebar"] img[src*="logo_automaGO"]{
 .welcome-container .stButton > button{ background:var(--brand); border:none; color:white; padding:10px 25px; font-size:1.2rem; border-radius:8px; transition:all .3s ease; }
 .welcome-container .stButton > button:hover{ background:var(--brand-700); transform:translateY(-2px); }
 
-.dashboard-title{ font-size:2.2rem; font-weight:700; color:#0b2038; margin-bottom:25px; }
-.metric-box{ background:linear-gradient(145deg,#ffffff,#f0f2f5); border-radius:12px; padding:20px; box-shadow:0 4px 15px rgba(0,0,0,0.08); display:flex; flex-direction:column; justify-content:space-between; min-height:120px; margin-bottom:15px; border:1px solid #e0e0e0; transition:all .2s ease-in-out; }
+.dashboard-title{ font-size:2.2rem; font-weight:700; color:var(--dash-text-dark); margin-bottom:25px; }
+.metric-box{
+  background:var(--dash-bg-card); border:1px solid var(--dash-border-card);
+  border-radius:var(--radius); padding:20px;
+  box-shadow:var(--dash-shadow-card); display:flex; flex-direction:column;
+  justify-content:space-between; min-height:120px; margin-bottom:15px;
+  transition:all .2s ease-in-out;
+}
 .metric-box:hover{ transform:translateY(-3px); box-shadow:0 6px 20px rgba(0,0,0,0.12); }
-.metric-box h3{ font-size:1.1rem; color:#334155; margin-bottom:10px; display:flex; align-items:center; gap:8px; }
-.metric-box .value{ font-size:2.2rem; font-weight:700; color:#0b2038; }
-.metric-box .delta{ font-size:.9rem; color:#64748b; }
-.chart-container{ background:linear-gradient(145deg,#ffffff,#f0f2f5); border-radius:12px; padding:20px; box-shadow:0 4px 15px rgba(0,0,0,0.08); margin-bottom:25px; border:1px solid #e0e0e0; }
-.chart-container h2{ font-size:1.5rem; color:#0b2038; margin-bottom:15px; }
+.metric-box h3{ font-size:1.1rem; color:var(--dash-text-medium); margin-bottom:10px; display:flex; align-items:center; gap:8px; }
+.metric-box .value{ font-size:2.2rem; font-weight:700; color:var(--dash-text-dark); }
+.metric-box .delta{ font-size:.9rem; color:var(--dash-text-light); }
+.chart-container{
+  background:var(--dash-bg-card); border:1px solid var(--dash-border-card);
+  border-radius:var(--radius); padding:20px;
+  box-shadow:var(--dash-shadow-card); margin-bottom:25px;
+}
+.chart-container h2{ font-size:1.5rem; color:var(--dash-text-dark); margin-bottom:15px; }
 
-/* Esconde nav se não autenticado */
-body:not(:has(.user-email-display)) div[data-testid="stSidebarNav"]{ display:none !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -223,7 +275,7 @@ def _signout():
     for key in list(st.session_state.keys()):
         del st.session_state[key]
     st.session_state.auth_ok = False
-    st.rerun() # Adiciona rerun aqui para garantir que a página de login seja exibida
+    st.rerun()
 
 def _user():
     sess = sb.auth.get_session()
@@ -231,8 +283,9 @@ def _user():
 
 # ========================= # Sidebar # =========================
 with st.sidebar:
-    st.image("assets/logo_family_finance.png", width=110)
-    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
+    # A logo Family Finance já está sendo posicionada de forma absoluta via CSS
+    st.image("assets/logo_family_finance.png", width=110, use_column_width=False, output_format="PNG") # Necessário para o seletor CSS `img[src*="logo_family_finance"]`
+    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True) # Divisor 1
 
     if "auth_ok" not in st.session_state:
         st.session_state.auth_ok = False
@@ -276,29 +329,26 @@ with st.sidebar:
 
     # Se autenticado:
     user = _user()
-    st.session_state.user = user # Armazena o objeto user na sessão
-    # Usando uma div com classe para o email do usuário para facilitar o CSS
+    st.session_state.user = user
     st.markdown(f'<div class="user-email-display">Logado: {user.email if user else ""}</div>', unsafe_allow_html=True)
-    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
+    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True) # Divisor 2
 
-    # A navegação de páginas nativa do Streamlit será renderizada aqui
-    # e posicionada via CSS 'order' property. Não precisamos de st.radio.
+    # A navegação de páginas nativa do Streamlit (st.PageLink) será renderizada aqui
+    # pelo próprio Streamlit, e o CSS irá reposicioná-la e estilizá-la.
+    # Não há necessidade de adicionar elementos Streamlit aqui para a navegação.
     
-    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True) # Divisor antes do botão Sair
+    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True) # Divisor 3
 
-    # Botão Sair
     if st.button("Sair", key="sidebar_logout_button"):
         _signout()
 
-    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True) # Divisor após o botão Sair
+    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True) # Divisor 4
 
-    # Logo AutomaGO no rodapé, centralizada
-    st.markdown('<div class="small" style="text-align:center;opacity:.9;">Powered by</div>', unsafe_allow_html=True)
-    st.image("assets/logo_automaGO.png", width=80)
+    st.markdown('<div class="small">Powered by</div>', unsafe_allow_html=True)
+    st.image("assets/logo_automaGO.png", width=80, use_column_width=False, output_format="PNG")
 
 
 # ========================= # Bootstrap household/member # =========================
-# Esta parte só roda se o usuário estiver autenticado e não tiver household_id
 if st.session_state.auth_ok and "HOUSEHOLD_ID" not in st.session_state:
     def bootstrap(user_id: str, supabase_client):
         try:
@@ -341,7 +391,6 @@ notify_due_bills(sb, st.session_state.HOUSEHOLD_ID, st.session_state.user)
 def get_dashboard_data(supabase_client, household_id):
     today = date.today()
     
-    # --- Dados do Mês Atual ---
     first_day_current_month = today.replace(day=1)
     current_month_tx = fetch_tx(supabase_client, household_id, first_day_current_month, today)
     
@@ -349,7 +398,6 @@ def get_dashboard_data(supabase_client, household_id):
     total_expense_current_month = sum(t.get("planned_amount", 0) for t in current_month_tx if t.get("type") == "expense")
     current_balance = total_income_current_month - total_expense_current_month
 
-    # --- Despesas por Categoria (Mês Atual) ---
     expense_transactions_with_category = [
         t for t in current_month_tx if t.get("type") == "expense" and t.get("category") is not None
     ]
@@ -361,7 +409,6 @@ def get_dashboard_data(supabase_client, household_id):
     else:
         expense_categories = pd.DataFrame(columns=["Categoria", "Valor"])
 
-    # --- Evolução Mensal (Últimos 6 meses) ---
     monthly_data = []
     for i in range(6): 
         month_date = today - relativedelta(months=i)
@@ -410,7 +457,7 @@ def show_home_dashboard():
     with col1:
         st.markdown(f"""
         <div class="metric-box">
-            <h3>💰 Receitas <span style="color:#22c55e;">▲</span></h3>
+            <h3>💰 Receitas <span style="color:var(--dash-success);">▲</span></h3>
             <div class="value">{to_brl(dashboard_data["current_month_income"])}</div>
             <div class="delta">Total de entradas no mês</div>
         </div>
@@ -419,14 +466,14 @@ def show_home_dashboard():
     with col2:
         st.markdown(f"""
         <div class="metric-box">
-            <h3>💸 Despesas <span style="color:#ef4444;">▼</span></h3>
+            <h3>💸 Despesas <span style="color:var(--dash-error);">▼</span></h3>
             <div class="value">{to_brl(dashboard_data["current_month_expense"])}</div>
             <div class="delta">Total de saídas no mês</div>
         </div>
         """, unsafe_allow_html=True)
 
     with col3:
-        saldo_color = "#22c55e" if dashboard_data["current_month_balance"] >= 0 else "#ef4444"
+        saldo_color = "var(--dash-success)" if dashboard_data["current_month_balance"] >= 0 else "var(--dash-error)"
         st.markdown(f"""
         <div class="metric-box">
             <h3>📊 Saldo <span style="color:{saldo_color};"></span></h3>
@@ -451,7 +498,7 @@ def show_home_dashboard():
                 hole=0.4,
                 color_discrete_sequence=px.colors.qualitative.Pastel
             )
-            fig_pie.update_traces(textposition='inside', textinfo='percent+label', marker=dict(line=dict(color='#0b2038', width=1)))
+            fig_pie.update_traces(textposition='inside', textinfo='percent+label', marker=dict(line=dict(color=var(--dash-text-dark), width=1)))
             fig_pie.update_layout(showlegend=True, margin=dict(l=20, r=20, t=50, b=20))
             st.plotly_chart(fig_pie, use_container_width=True)
         else:
@@ -463,9 +510,9 @@ def show_home_dashboard():
         st.markdown('<h2>Evolução Financeira Mensal</h2>', unsafe_allow_html=True)
         if not dashboard_data["monthly_evolution_df"].empty:
             fig_line = go.Figure()
-            fig_line.add_trace(go.Scatter(x=dashboard_data["monthly_evolution_df"]["Mês"], y=dashboard_data["monthly_evolution_df"]["Receitas"], mode='lines+markers', name='Receitas', line=dict(color='#22c55e', width=3)))
-            fig_line.add_trace(go.Scatter(x=dashboard_data["monthly_evolution_df"]["Mês"], y=dashboard_data["monthly_evolution_df"]["Despesas"], mode='lines+markers', name='Despesas', line=dict(color='#ef4444', width=3)))
-            fig_line.add_trace(go.Scatter(x=dashboard_data["monthly_evolution_df"]["Mês"], y=dashboard_data["monthly_evolution_df"]["Saldo"], mode='lines+markers', name='Saldo', line=dict(color='#0ea5e9', width=4, dash='dot')))
+            fig_line.add_trace(go.Scatter(x=dashboard_data["monthly_evolution_df"]["Mês"], y=dashboard_data["monthly_evolution_df"]["Receitas"], mode='lines+markers', name='Receitas', line=dict(color=var(--dash-success), width=3)))
+            fig_line.add_trace(go.Scatter(x=dashboard_data["monthly_evolution_df"]["Mês"], y=dashboard_data["monthly_evolution_df"]["Despesas"], mode='lines+markers', name='Despesas', line=dict(color=var(--dash-error), width=3)))
+            fig_line.add_trace(go.Scatter(x=dashboard_data["monthly_evolution_df"]["Mês"], y=dashboard_data["monthly_evolution_df"]["Saldo"], mode='lines+markers', name='Saldo', line=dict(color=var(--brand), width=4, dash='dot')))
 
             fig_line.update_layout(
                 title='Receitas, Despesas e Saldo ao longo do Tempo',
@@ -502,7 +549,7 @@ def show_home_dashboard():
             title="Resultado Líquido por Membro",
             color="valor_eff",
             color_continuous_scale=px.colors.sequential.RdBu,
-            labels={"valor_eff": "Resultado (R$)"}
+            labels={"valor_eff": "Resultado (R\$)"}
         )
         fig_bar.update_layout(height=400, showlegend=False)
         st.plotly_chart(fig_bar, use_container_width=True)
@@ -513,7 +560,9 @@ def show_home_dashboard():
 
 
 # ========================= # Roteamento de Páginas (Após Login) # =========================
-# Se o usuário está autenticado e o household está configurado, exibe o dashboard.
-# Se outras páginas existirem na pasta 'pages/', o Streamlit as renderizará automaticamente.
 if st.session_state.auth_ok and "HOUSEHOLD_ID" in st.session_state:
-    show_home_dashboard() # app.py é a página Home/Dashboard
+    # O Streamlit renderiza a página atual automaticamente.
+    # Como app.py é a "Home", ele sempre exibirá show_home_dashboard() se não houver pages/
+    # Se houver pages/, o Streamlit alterna para elas.
+    # Então, este bloco apenas garante que o dashboard seja mostrado na página principal.
+    show_home_dashboard() 
