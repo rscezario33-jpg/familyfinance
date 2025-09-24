@@ -3,4 +3,4 @@ supabase>=2.6
 pandas>=2.2
 python-dateutil>=2.9
 plotly>=5.0
-streamlit-aggrid
+streamlit-aggrid==0.3.4.post3
