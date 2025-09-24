@@ -1,7 +1,5 @@
-# pages/1_Entrada.py
-# -*- coding: utf-8 -*-
+# pages/1_Entrada.py — Family Finance • Home pós-login
 from __future__ import annotations
-
 import streamlit as st
 from ff_shared import require_session_ids
 
@@ -25,7 +23,7 @@ st.write(f"**Member:** {member_id}")
 st.markdown("---")
 st.subheader("Próximos passos")
 st.write(
-    "- Criar contas padrão (carteira, conta corrente, cartão) no onboarding.\n"
+    "- Onboarding: criar contas padrão (carteira, conta corrente, cartão).\n"
     "- Lançar primeira entrada/saída.\n"
     "- Ajustar metas mensais por categoria."
 )
