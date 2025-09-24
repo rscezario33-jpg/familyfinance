@@ -59,11 +59,11 @@ def inject_css_login():
 
   .block-container {{
       min-height:100vh;
-      display:flex;
-      align-items:center;
-      justify-content:center;
       padding:0 5vw !important;
-      overflow:hidden;
+      /* display:flex; */
+      /* align-items:center; */
+      /* justify-content:center; */
+      /* overflow:hidden; */
   }}
   .wrap-max {{
       width:min(1200px,96vw);
