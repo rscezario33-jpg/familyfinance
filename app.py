@@ -87,6 +87,31 @@ section[data-testid="stSidebar"] img {
     font-size:.85rem;
     opacity:.75;
 }
+/* Estilo para a tela de boas-vindas */
+.welcome-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 80vh; /* Ocupa a maior parte da altura da viewport */
+    text-align: center;
+    padding: 20px;
+}
+.welcome-container h1 {
+    font-size: 2.5rem;
+    color: #0b2038;
+    margin-bottom: 20px;
+}
+.welcome-container p {
+    font-size: 1.2rem;
+    color: #334155;
+    margin-bottom: 30px;
+}
+.welcome-container img {
+    max-width: 300px;
+    height: auto;
+    margin-top: 20px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -170,14 +195,18 @@ with st.sidebar:
     st.caption(f"Logado: {user.email if user else ''}")
     st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="sidebar-title">Navegação</div>', unsafe_allow_html=True)
-    # As páginas serão automaticamente listadas aqui pelo Streamlit devido à estrutura de pastas
+    # --- INÍCIO DA MODIFICAÇÃO: Ocultar menu se não estiver autenticado ---
+    if st.session_state.auth_ok:
+        st.markdown('<div class="sidebar-title">Navegação</div>', unsafe_allow_html=True)
+        # As páginas serão automaticamente listadas aqui pelo Streamlit devido à estrutura de pastas
+        # O Streamlit lida com o st.radio implicitamente quando há uma pasta pages/
+        st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
+        if st.button("Sair"):
+            _signout()
+            st.rerun()
+        st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
+    # --- FIM DA MODIFICAÇÃO ---
 
-    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
-    if st.button("Sair"):
-        _signout()
-        st.rerun()
-    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
     st.markdown('<div class="small" style="text-align:center;opacity:.9;">Powered by</div>', unsafe_allow_html=True)
     st.image("assets/logo_automaGO.png", width=80)
 
@@ -185,7 +214,9 @@ with st.sidebar:
 # ========================= # Bootstrap household/member # =========================
 # Esta parte só roda se o usuário estiver autenticado
 if st.session_state.auth_ok and "HOUSEHOLD_ID" not in st.session_state:
-    @st.cache_data(show_spinner=False)
+    # A função bootstrap NÃO DEVE ser cacheada com st.cache_data
+    # porque 'sb' (supabase_client) é um objeto não-hashable.
+    # A lógica de ser executada apenas uma vez é controlada pelo 'if "HOUSEHOLD_ID" not in st.session_state:'.
     def bootstrap(user_id: str, supabase_client):
         try:
             supabase_client.rpc("accept_pending_invite").execute()
@@ -201,8 +232,15 @@ if st.session_state.auth_ok and "HOUSEHOLD_ID" not in st.session_state:
 
 # Verificação final antes de prosseguir para o conteúdo da página
 if not (st.session_state.auth_ok and "HOUSEHOLD_ID" in st.session_state):
-    st.warning("Por favor, faça login ou crie uma conta para continuar.")
-    st.stop()
+    # --- INÍCIO DA MODIFICAÇÃO: Conteúdo da tela principal quando deslogado ---
+    st.markdown('<div class="welcome-container">', unsafe_allow_html=True)
+    st.markdown('<h1>Bem-vindo ao Family Finance!</h1>', unsafe_allow_html=True)
+    st.markdown('<p>Seu assistente pessoal para organizar as finanças familiares de forma simples e eficiente.</p>', unsafe_allow_html=True)
+    st.image("assets/logo_family_finance.png", width=250) # Você pode usar outra imagem aqui
+    st.markdown('<p>Por favor, faça login ou crie uma conta na barra lateral para começar.</p>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.stop() # Interrompe a execução para não carregar as páginas do app
+    # --- FIM DA MODIFICAÇÃO ---
 
 # Dispara lembretes (não bloqueia fluxo) - Acesso aos dados da sessão
 notify_due_bills(sb, st.session_state.HOUSEHOLD_ID, st.session_state.user)
@@ -211,7 +249,7 @@ notify_due_bills(sb, st.session_state.HOUSEHOLD_ID, st.session_state.user)
 # ========================= # Conteúdo da Página Principal (Entrada) # =========================
 # Este bloco se torna o conteúdo padrão da página principal do app
 st.title("Family Finance")
-st.header("🏠 Visão Geral")
+st.header("�� Visão Geral")
 
 first_day = date.today().replace(day=1)
 txm = fetch_tx(sb, st.session_state.HOUSEHOLD_ID, first_day, date.today())
