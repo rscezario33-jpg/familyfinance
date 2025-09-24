@@ -129,7 +129,7 @@ section[data-testid="stSidebar"] a { color: var(--sb-fg) !important; }
 section[data-testid="stSidebar"] .stButton:last-of-type button{
   display:block !important;
   width: calc(100% - 32px) !important;
-  margin: 8px 16px 2px 16px !important;
+  margin: 16px 16px 16px 16px !important;
   border-radius:14px !important;
   background:var(--danger) !important;
   border:1px solid var(--danger) !important;
