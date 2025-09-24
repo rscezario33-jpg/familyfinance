@@ -13,7 +13,8 @@ from dateutil.relativedelta import relativedelta
 
 # Importações de módulos locais
 from supabase_client import get_supabase
-from utils import to_brl, _to_date_safe, fetch_tx, fetch_members, notify_due_bills
+# >>> ALTERAÇÃO 1: adiciona fetch_categories
+from utils import to_brl, _to_date_safe, fetch_tx, fetch_members, notify_due_bills, fetch_categories
 
 # Configurações da página principal (Dashboard)
 st.set_page_config(page_title="🏠 Home", layout="wide")
@@ -364,16 +365,22 @@ def get_dashboard_data(supabase_client, household_id):
     today = date.today()
     first_day_current_month = today.replace(day=1)
     current_month_tx = fetch_tx(supabase_client, household_id, first_day_current_month, today)
+
+    # >>> ALTERAÇÃO 2: carregar e mapear categorias
+    cats = fetch_categories(supabase_client, household_id)
+    cat_name_by_id = {c["id"]: c.get("name", "Sem Categoria") for c in cats}
+
     total_income_current_month = sum(t.get("planned_amount", 0) for t in current_month_tx if t.get("type") == "income")
     total_expense_current_month = sum(t.get("planned_amount", 0) for t in current_month_tx if t.get("type") == "expense")
     current_balance = total_income_current_month - total_expense_current_month
 
-    expense_transactions_with_category = [t for t in current_month_tx if t.get("type") == "expense" and t.get("category") is not None]
-    if expense_transactions_with_category:
-        expense_categories_df = pd.DataFrame(expense_transactions_with_category)
-        expense_categories_df['planned_amount'] = pd.to_numeric(expense_categories_df['planned_amount'], errors='coerce').fillna(0)
-        expense_categories = expense_categories_df.groupby("category")["planned_amount"].sum().reset_index()
-        expense_categories.columns = ["Categoria", "Valor"]
+    # >>> ALTERAÇÃO 3: corrigir agrupamento por categoria
+    expense_txs = [t for t in current_month_tx if t.get("type") == "expense"]
+    if expense_txs:
+        df_exp = pd.DataFrame(expense_txs)
+        df_exp["Categoria"] = df_exp.get("category_id").map(lambda cid: cat_name_by_id.get(cid, "Sem Categoria"))
+        df_exp["Valor"] = pd.to_numeric(df_exp.get("planned_amount", 0), errors="coerce").fillna(0)
+        expense_categories = df_exp.groupby("Categoria", dropna=False)["Valor"].sum().reset_index()
     else:
         expense_categories = pd.DataFrame(columns=["Categoria", "Valor"])
 
