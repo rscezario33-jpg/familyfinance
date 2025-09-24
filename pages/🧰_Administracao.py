@@ -580,14 +580,15 @@ def render_family_tab():
             "other": "Outro",
         }[k]
     )
+    # ======= ÚNICA ALTERAÇÃO: usar colunas do seu schema =======
     if st.button("Salvar relação", use_container_width=True):
         try:
             sb.table("relationships").upsert({
                 "household_id": HOUSEHOLD_ID,
-                "member_a": left["id"],
-                "member_b": right["id"],
-                "relation": relation
-            }, on_conflict="household_id,member_a,member_b").execute()
+                "from_member_id": left["id"],
+                "to_member_id": right["id"],
+                "relationship_type": relation
+            }, on_conflict="household_id,from_member_id,to_member_id").execute()
             _toast("Relação salva!")
         except Exception as e:
             st.error(f"Erro ao salvar relação: {e}")
@@ -602,10 +603,11 @@ def render_family_tab():
             def name(mid):
                 m = next((x for x in mems if x["id"] == mid), None)
                 return m["display_name"] if m else mid
+            # ======= ÚNICA ALTERAÇÃO: ler colunas corretas =======
             df = pd.DataFrame([{
-                "A": name(r["member_a"]),
-                "Relação": r["relation"],
-                "B": name(r["member_b"])
+                "A": name(r["from_member_id"]),
+                "Relação": r["relationship_type"],
+                "B": name(r["to_member_id"])
             } for r in rows])
             st.dataframe(df, use_container_width=True)
     except Exception as e:
