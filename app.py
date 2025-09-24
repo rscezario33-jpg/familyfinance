@@ -1,4 +1,4 @@
-# app.py — Family Finance v8.2.1 # (Remoção de cache para supabase_client)
+# app.py — Family Finance v8.3.0 # (KeyError fix, sidebar custom navigation, page content routing)
 from __future__ import annotations
 from datetime import date, datetime, timedelta
 import uuid
@@ -9,6 +9,7 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
+from dateutil.relativedelta import relativedelta # Adicionado para cálculo de datas
 
 # Importações de módulos locais
 from supabase_client import get_supabase
@@ -253,6 +254,7 @@ def _user():
 
 # ========================= # Sidebar (logos 50% + Powered by) # =========================
 with st.sidebar:
+    # Logo Family Finance no topo, centralizada
     st.image("assets/logo_family_finance.png", width=110)
     st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
 
@@ -260,6 +262,7 @@ with st.sidebar:
         st.session_state.auth_ok = False
 
     if not st.session_state.auth_ok:
+        # Conteúdo de Acesso (Login/Criar Conta)
         st.markdown('<div class="sidebar-title">Acesso à Plataforma</div>', unsafe_allow_html=True)
         email = st.text_input("Email").strip()
         pwd = st.text_input("Senha", type="password")
@@ -302,18 +305,37 @@ with st.sidebar:
     st.caption(f"Logado: {user.email if user else ''}")
     st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
 
-    # --- INÍCIO DA MODIFICAÇÃO: Ocultar menu se não estiver autenticado ---
+    # --- NOVO: Navegação Customizada após o Login ---
     if st.session_state.auth_ok:
         st.markdown('<div class="sidebar-title">Navegação</div>', unsafe_allow_html=True)
-        # As páginas serão automaticamente listadas aqui pelo Streamlit devido à estrutura de pastas
-        # O Streamlit lida com o st.radio implicitamente quando há uma pasta pages/
+        # Opções de navegação com ícones
+        navigation_options = {
+            "🏠 Home": "home",
+            "💸 Lançamentos": "lancamentos",
+            "📊 Relatórios": "relatorios",
+            "👥 Membros": "membros",
+            "⚙️ Configurações": "configuracoes"
+        }
+        # Define a página padrão se não houver seleção
+        if "current_page" not in st.session_state:
+            st.session_state.current_page = "home"
+
+        selected_page_label = st.radio(
+            "Ir para",
+            list(navigation_options.keys()),
+            index=list(navigation_options.keys()).index(next(key for key, value in navigation_options.items() if value == st.session_state.current_page)),
+            key="main_navigation_radio"
+        )
+        st.session_state.current_page = navigation_options[selected_page_label]
+        
         st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
         if st.button("Sair"):
             _signout()
             st.rerun()
         st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
-    # --- FIM DA MODIFICAÇÃO ---
+    # --- FIM DA MODIFICAÇÃO DA NAVEGAÇÃO ---
 
+    # Logo AutomaGO no rodapé, centralizada
     st.markdown('<div class="small" style="text-align:center;opacity:.9;">Powered by</div>', unsafe_allow_html=True)
     st.image("assets/logo_automaGO.png", width=80)
 
@@ -346,9 +368,8 @@ if st.session_state.auth_ok and "HOUSEHOLD_ID" not in st.session_state:
     st.session_state.HOUSEHOLD_ID = ids["household_id"]
     st.session_state.MY_MEMBER_ID = ids["member_id"]
 
-# Verificação final antes de prosseguir para o conteúdo da página
+# Verificação final antes de prosseguir para o conteúdo da página (pré-login)
 if not (st.session_state.auth_ok and "HOUSEHOLD_ID" in st.session_state):
-    # --- INÍCIO DA MODIFICAÇÃO: Conteúdo da tela principal quando deslogado ---
     st.markdown('<div class="welcome-container">', unsafe_allow_html=True)
     st.markdown('<div class="welcome-overlay">', unsafe_allow_html=True)
     st.markdown('<h1>Bem-vindo ao Family Finance!</h1>', unsafe_allow_html=True)
@@ -358,19 +379,17 @@ if not (st.session_state.auth_ok and "HOUSEHOLD_ID" in st.session_state):
     st.markdown('</div>', unsafe_allow_html=True) # Fecha welcome-overlay
     st.markdown('</div>', unsafe_allow_html=True) # Fecha welcome-container
     st.stop() # Interrompe a execução para não carregar as páginas do app
-    # --- FIM DA MODIFICAÇÃO ---
 
 # Dispara lembretes (não bloqueia fluxo) - Acesso aos dados da sessão
 notify_due_bills(sb, st.session_state.HOUSEHOLD_ID, st.session_state.user)
 
 
 # ========================= # Funções para Buscar Dados do Dashboard # =========================
-# REMOVIDO: @st.cache_data(ttl=300)
 def get_dashboard_data(supabase_client, household_id):
     today = date.today()
-    first_day_current_month = today.replace(day=1)
-
+    
     # --- Dados do Mês Atual ---
+    first_day_current_month = today.replace(day=1)
     current_month_tx = fetch_tx(supabase_client, household_id, first_day_current_month, today)
     
     total_income_current_month = sum(t.get("planned_amount", 0) for t in current_month_tx if t.get("type") == "income")
@@ -378,24 +397,34 @@ def get_dashboard_data(supabase_client, household_id):
     current_balance = total_income_current_month - total_expense_current_month
 
     # --- Despesas por Categoria (Mês Atual) ---
-    expense_categories = pd.DataFrame([
-        t for t in current_month_tx if t.get("type") == "expense" and t.get("category")
-    ]).groupby("category")["planned_amount"].sum().reset_index()
-    expense_categories.columns = ["Categoria", "Valor"]
+    expense_transactions_with_category = [
+        t for t in current_month_tx if t.get("type") == "expense" and t.get("category") is not None
+    ]
+    if expense_transactions_with_category:
+        expense_categories_df = pd.DataFrame(expense_transactions_with_category)
+        # Garante que 'planned_amount' seja numérico, evitando possíveis erros
+        expense_categories_df['planned_amount'] = pd.to_numeric(expense_categories_df['planned_amount'], errors='coerce').fillna(0)
+        expense_categories = expense_categories_df.groupby("category")["planned_amount"].sum().reset_index()
+        expense_categories.columns = ["Categoria", "Valor"]
+    else:
+        # Retorna um DataFrame vazio com as colunas esperadas para evitar KeyError
+        expense_categories = pd.DataFrame(columns=["Categoria", "Valor"])
+
 
     # --- Evolução Mensal (Últimos 6 meses) ---
     monthly_data = []
-    # Itera sobre os últimos 6 meses, incluindo o mês atual se houver dados
-    for i in range(6): 
+    for i in range(6): # Últimos 6 meses (do atual para trás)
         # Calcula o primeiro dia do mês 'i' meses atrás
-        month_start_calc = (today.replace(day=1) - pd.DateOffset(months=i)).to_timestamp().date()
+        month_date = today - relativedelta(months=i)
+        month_start_calc = month_date.replace(day=1)
         
-        # Calcula o último dia do mês 'i' meses atrás
-        # O último dia é o primeiro dia do próximo mês menos um dia
-        next_month_start = (today.replace(day=1) - pd.DateOffset(months=i-1)).to_timestamp().date()
-        month_end_calc = next_month_start - timedelta(days=1)
-        
-        # Garante que month_end_calc não ultrapasse today se for o mês atual
+        # Calcula o último dia do mês
+        if month_date.month == 12:
+            month_end_calc = date(month_date.year + 1, 1, 1) - timedelta(days=1)
+        else:
+            month_end_calc = date(month_date.year, month_date.month + 1, 1) - timedelta(days=1)
+
+        # Garante que month_end_calc não vá além de hoje para o mês atual
         if month_end_calc > today:
             month_end_calc = today
         
@@ -405,13 +434,12 @@ def get_dashboard_data(supabase_client, household_id):
         expense = sum(t.get("planned_amount", 0) for t in txs if t.get("type") == "expense")
         
         monthly_data.append({
-            "Mês": month_start_calc.strftime("%Y-%m"),
+            "Mês": month_start_calc.strftime("%Y-%m"), # Formato YYYY-MM para garantir ordenação correta
             "Receitas": income,
             "Despesas": expense,
             "Saldo": income - expense
         })
     monthly_df = pd.DataFrame(monthly_data).sort_values("Mês", ascending=True)
-
 
     return {
         "current_month_income": total_income_current_month,
@@ -422,120 +450,137 @@ def get_dashboard_data(supabase_client, household_id):
         "all_transactions_current_month": current_month_tx # Usado para a visão por membro
     }
 
+# ========================= # Função para renderizar o Dashboard (Home) # =========================
+def show_home_dashboard():
+    st.markdown('<h1 class="dashboard-title">✨ Dashboard Financeiro Familiar</h1>', unsafe_allow_html=True)
 
-# ========================= # Conteúdo da Página Principal (Dashboard) # =========================
-st.markdown('<h1 class="dashboard-title">✨ Dashboard Financeiro Familiar</h1>', unsafe_allow_html=True)
+    # Centraliza o spinner para carregar os dados
+    with st.spinner("Carregando dados do dashboard..."):
+        dashboard_data = get_dashboard_data(sb, st.session_state.HOUSEHOLD_ID)
 
-# Centraliza o spinner para carregar os dados
-with st.spinner("Carregando dados do dashboard..."):
-    dashboard_data = get_dashboard_data(sb, st.session_state.HOUSEHOLD_ID)
+    # --- Visão Geral do Mês ---
+    st.markdown("<h2>Visão Geral do Mês Atual</h2>", unsafe_allow_html=True)
+    col1, col2, col3 = st.columns(3)
 
-# --- Visão Geral do Mês ---
-st.markdown("<h2>Visão Geral do Mês Atual</h2>", unsafe_allow_html=True)
-col1, col2, col3 = st.columns(3)
+    with col1:
+        st.markdown(f"""
+        <div class="metric-box">
+            <h3>💰 Receitas <span style="color:#22c55e;">▲</span></h3>
+            <div class="value">{to_brl(dashboard_data["current_month_income"])}</div>
+            <div class="delta">Total de entradas no mês</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-with col1:
-    st.markdown(f"""
-    <div class="metric-box">
-        <h3>💰 Receitas <span style="color:#22c55e;">▲</span></h3>
-        <div class="value">{to_brl(dashboard_data["current_month_income"])}</div>
-        <div class="delta">Total de entradas no mês</div>
-    </div>
-    """, unsafe_allow_html=True)
+    with col2:
+        st.markdown(f"""
+        <div class="metric-box">
+            <h3>💸 Despesas <span style="color:#ef4444;">▼</span></h3>
+            <div class="value">{to_brl(dashboard_data["current_month_expense"])}</div>
+            <div class="delta">Total de saídas no mês</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-with col2:
-    st.markdown(f"""
-    <div class="metric-box">
-        <h3>💸 Despesas <span style="color:#ef4444;">▼</span></h3>
-        <div class="value">{to_brl(dashboard_data["current_month_expense"])}</div>
-        <div class="delta">Total de saídas no mês</div>
-    </div>
-    """, unsafe_allow_html=True)
+    with col3:
+        saldo_color = "#22c55e" if dashboard_data["current_month_balance"] >= 0 else "#ef4444"
+        st.markdown(f"""
+        <div class="metric-box">
+            <h3>📊 Saldo <span style="color:{saldo_color};"></span></h3>
+            <div class="value" style="color:{saldo_color};">{to_brl(dashboard_data["current_month_balance"])}</div>
+            <div class="delta">Resultado financeiro até hoje</div>
+        </div>
+        """, unsafe_allow_html=True)
 
-with col3:
-    saldo_color = "#22c55e" if dashboard_data["current_month_balance"] >= 0 else "#ef4444"
-    st.markdown(f"""
-    <div class="metric-box">
-        <h3>📊 Saldo <span style="color:{saldo_color};"></span></h3>
-        <div class="value" style="color:{saldo_color};">{to_brl(dashboard_data["current_month_balance"])}</div>
-        <div class="delta">Resultado financeiro até hoje</div>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("---") # Separador visual
 
-st.markdown("---") # Separador visual
+    # --- Análise de Despesas por Categoria e Evolução Mensal ---
+    col_chart1, col_chart2 = st.columns(2)
 
-# --- Análise de Despesas por Categoria e Evolução Mensal ---
-col_chart1, col_chart2 = st.columns(2)
+    with col_chart1:
+        st.markdown('<div class="chart-container">', unsafe_allow_html=True)
+        st.markdown('<h2>Despesas por Categoria (Mês Atual)</h2>', unsafe_allow_html=True)
+        if not dashboard_data["expense_categories_df"].empty:
+            fig_pie = px.pie(
+                dashboard_data["expense_categories_df"],
+                values="Valor",
+                names="Categoria",
+                title="Distribuição das Despesas",
+                hole=0.4, # Donut chart
+                color_discrete_sequence=px.colors.qualitative.Pastel # Paleta de cores
+            )
+            fig_pie.update_traces(textposition='inside', textinfo='percent+label', marker=dict(line=dict(color='#0b2038', width=1)))
+            fig_pie.update_layout(showlegend=True, margin=dict(l=20, r=20, t=50, b=20))
+            st.plotly_chart(fig_pie, use_container_width=True)
+        else:
+            st.info("Nenhuma despesa registrada para o mês atual com categoria.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
-with col_chart1:
+    with col_chart2:
+        st.markdown('<div class="chart-container">', unsafe_allow_html=True)
+        st.markdown('<h2>Evolução Financeira Mensal</h2>', unsafe_allow_html=True)
+        if not dashboard_data["monthly_evolution_df"].empty:
+            fig_line = go.Figure()
+            fig_line.add_trace(go.Scatter(x=dashboard_data["monthly_evolution_df"]["Mês"], y=dashboard_data["monthly_evolution_df"]["Receitas"], mode='lines+markers', name='Receitas', line=dict(color='#22c55e', width=3)))
+            fig_line.add_trace(go.Scatter(x=dashboard_data["monthly_evolution_df"]["Mês"], y=dashboard_data["monthly_evolution_df"]["Despesas"], mode='lines+markers', name='Despesas', line=dict(color='#ef4444', width=3)))
+            fig_line.add_trace(go.Scatter(x=dashboard_data["monthly_evolution_df"]["Mês"], y=dashboard_data["monthly_evolution_df"]["Saldo"], mode='lines+markers', name='Saldo', line=dict(color='#0ea5e9', width=4, dash='dot')))
+
+            fig_line.update_layout(
+                title='Receitas, Despesas e Saldo ao longo do Tempo',
+                xaxis_title='Mês',
+                yaxis_title='Valor',
+                hovermode='x unified',
+                legend_title_text='Legenda',
+                height=400
+            )
+            st.plotly_chart(fig_line, use_container_width=True)
+        else:
+            st.info("Dados insuficientes para evolução mensal. Registre mais transações.")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("---") # Separador visual
+
+    # --- Visão por Membro (Consolidado do Mês) ---
     st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-    st.markdown('<h2>Despesas por Categoria (Mês Atual)</h2>', unsafe_allow_html=True)
-    if not dashboard_data["expense_categories_df"].empty:
-        fig_pie = px.pie(
-            dashboard_data["expense_categories_df"],
-            values="Valor",
-            names="Categoria",
-            title="Distribuição das Despesas",
-            hole=0.4, # Donut chart
-            color_discrete_sequence=px.colors.qualitative.Pastel # Paleta de cores
+    st.markdown('<h2>Resultado por Membro (Mês Atual)</h2>', unsafe_allow_html=True)
+
+    mems = fetch_members(sb, st.session_state.HOUSEHOLD_ID)
+    mem_map = {m["id"]: m["display_name"] for m in mems}
+
+    if dashboard_data["all_transactions_current_month"]:
+        df = pd.DataFrame(dashboard_data["all_transactions_current_month"])
+        df["valor_eff"] = df.apply(lambda r: (r.get("paid_amount") if r.get("is_paid") else r.get("planned_amount", 0)) * (1 if r.get("type")=="income" else -1), axis=1)
+        df["Membro"] = df["member_id"].map(mem_map).fillna("Não Atribuído")
+
+        member_summary = df.groupby("Membro")["valor_eff"].sum().reset_index()
+        
+        fig_bar = px.bar(
+            member_summary,
+            x="Membro",
+            y="valor_eff",
+            title="Resultado Líquido por Membro",
+            color="valor_eff", # Colore as barras com base no valor
+            color_continuous_scale=px.colors.sequential.RdBu, # Escala de cores (vermelho-azul)
+            labels={"valor_eff": "Resultado (R\$)"}
         )
-        fig_pie.update_traces(textposition='inside', textinfo='percent+label', marker=dict(line=dict(color='#0b2038', width=1)))
-        fig_pie.update_layout(showlegend=True, margin=dict(l=20, r=20, t=50, b=20))
-        st.plotly_chart(fig_pie, use_container_width=True)
+        fig_bar.update_layout(height=400, showlegend=False)
+        st.plotly_chart(fig_bar, use_container_width=True)
+
     else:
-        st.info("Nenhuma despesa registrada para o mês atual.")
+        st.info("Sem lançamentos no mês para análise por membro.")
     st.markdown('</div>', unsafe_allow_html=True)
 
-with col_chart2:
-    st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-    st.markdown('<h2>Evolução Financeira Mensal</h2>', unsafe_allow_html=True)
-    if not dashboard_data["monthly_evolution_df"].empty:
-        fig_line = go.Figure()
-        fig_line.add_trace(go.Scatter(x=dashboard_data["monthly_evolution_df"]["Mês"], y=dashboard_data["monthly_evolution_df"]["Receitas"], mode='lines+markers', name='Receitas', line=dict(color='#22c55e', width=3)))
-        fig_line.add_trace(go.Scatter(x=dashboard_data["monthly_evolution_df"]["Mês"], y=dashboard_data["monthly_evolution_df"]["Despesas"], mode='lines+markers', name='Despesas', line=dict(color='#ef4444', width=3)))
-        fig_line.add_trace(go.Scatter(x=dashboard_data["monthly_evolution_df"]["Mês"], y=dashboard_data["monthly_evolution_df"]["Saldo"], mode='lines+markers', name='Saldo', line=dict(color='#0ea5e9', width=4, dash='dot')))
-
-        fig_line.update_layout(
-            title='Receitas, Despesas e Saldo ao longo do Tempo',
-            xaxis_title='Mês',
-            yaxis_title='Valor',
-            hovermode='x unified',
-            legend_title_text='Legenda',
-            height=400
-        )
-        st.plotly_chart(fig_line, use_container_width=True)
-    else:
-        st.info("Dados insuficientes para evolução mensal. Registre mais transações.")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-st.markdown("---") # Separador visual
-
-# --- Visão por Membro (Consolidado do Mês) ---
-st.markdown('<div class="chart-container">', unsafe_allow_html=True)
-st.markdown('<h2>Resultado por Membro (Mês Atual)</h2>', unsafe_allow_html=True)
-
-mems = fetch_members(sb, st.session_state.HOUSEHOLD_ID)
-mem_map = {m["id"]: m["display_name"] for m in mems}
-
-if dashboard_data["all_transactions_current_month"]:
-    df = pd.DataFrame(dashboard_data["all_transactions_current_month"])
-    df["valor_eff"] = df.apply(lambda r: (r.get("paid_amount") if r.get("is_paid") else r.get("planned_amount", 0)) * (1 if r.get("type")=="income" else -1), axis=1)
-    df["Membro"] = df["member_id"].map(mem_map).fillna("Não Atribuído")
-
-    member_summary = df.groupby("Membro")["valor_eff"].sum().reset_index()
-    
-    fig_bar = px.bar(
-        member_summary,
-        x="Membro",
-        y="valor_eff",
-        title="Resultado Líquido por Membro",
-        color="valor_eff", # Colore as barras com base no valor
-        color_continuous_scale=px.colors.sequential.RdBu, # Escala de cores (vermelho-azul)
-        labels={"valor_eff": "Resultado (R\$)"}
-    )
-    fig_bar.update_layout(height=400, showlegend=False)
-    st.plotly_chart(fig_bar, use_container_width=True)
-
-else:
-    st.info("Sem lançamentos no mês para análise por membro.")
-st.markdown('</div>', unsafe_allow_html=True)
+# ========================= # Roteamento de Páginas (Após Login) # =========================
+if st.session_state.auth_ok and "HOUSEHOLD_ID" in st.session_state:
+    if st.session_state.current_page == "home":
+        show_home_dashboard()
+    elif st.session_state.current_page == "lancamentos":
+        st.title("💸 Lançamentos")
+        st.info("Funcionalidade de Lançamentos em desenvolvimento. Em breve aqui!")
+    elif st.session_state.current_page == "relatorios":
+        st.title("📊 Relatórios")
+        st.info("Funcionalidade de Relatórios em desenvolvimento. Em breve aqui!")
+    elif st.session_state.current_page == "membros":
+        st.title("👥 Membros")
+        st.info("Gerenciamento de Membros em desenvolvimento. Em breve aqui!")
+    elif st.session_state.current_page == "configuracoes":
+        st.title("⚙️ Configurações")
+        st.info("Configurações do Household em desenvolvimento. Em breve aqui!")
