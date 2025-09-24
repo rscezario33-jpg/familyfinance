@@ -1,12 +1,12 @@
-# pages/0_Login.py — Family Finance • Login (ajustes anti-rolagem + logo menor)
+# pages/0_Login.py — Family Finance • Login com Supabase + layout glass
 from __future__ import annotations
 
 import base64
 from pathlib import Path
 import streamlit as st
 
-from supabase_client import get_supabase, FFConfigError
-from ff_shared import bootstrap
+from supabase_client import get_supabase, FFConfigError  # usa a versão que te passei
+from ff_shared import bootstrap  # idempotente (household/member)
 
 st.set_page_config(
     page_title="Login • Family Finance",
@@ -27,13 +27,14 @@ def pick(*names: str) -> Path | None:
             return p
     return None
 
+# mantém os nomes que você já tem no projeto
 LOGO = pick("logo_family_finance.png", "logo_family_finance.jpg", "logo.png")
-BG   = pick("Backgroud_FF.png", "Background_FF.png", "background.png")
+BG   = pick("Backgroud_FF.png", "Background_FF.png", "background.png")  # inclui ambas grafias
 
 BRAND_ORANGE = "#F37321"
 
 # ------------------------------------------------------------
-# CSS helpers
+# CSS helpers (mesmo conceito do layout que você anexou)
 # ------------------------------------------------------------
 def _b64(p: Path | None) -> str | None:
     if not p: return None
@@ -43,89 +44,50 @@ def _b64(p: Path | None) -> str | None:
         return None
 
 def inject_css_login():
-    """Tela de login (sem rolagem), logo menor e card glass alinhado."""
+    """Tela de login (fundo imagem + card glass), sem rolagem e conteúdo centralizado."""
     bg64 = _b64(BG)
     if bg64:
         bg_css = f'''.stApp{{background:url("data:image/png;base64,{bg64}") no-repeat center/cover fixed;}}'''
     else:
         bg_css = '''.stApp{background:linear-gradient(120deg,#0B2038,#0E2744);}'''
-
     st.markdown(f"""
 <style>
-  /* Some tudo que gera barra e mantém 100vh real */
-  html, body {{ height:100%; overflow:hidden; }}
-  .stApp {{ height:100%; overflow:hidden; }}
-  header,#MainMenu,footer{{display:none !important;}}
-  section[data-testid='stSidebar']{{display:none !important;}}
+  header,#MainMenu,footer{{visibility:hidden;}}
+  section[data-testid='stSidebar']{{display:none;}}
 
   {bg_css}
 
-  /* Remove paddings da view e garante 100vh */
-  [data-testid="stAppViewContainer"] > .main {{
-      padding:0 !important; height:100%;
+  html,body,.stApp{{height:100%;}}
+  .block-container{{
+      min-height:100vh;
+      display:flex;align-items:center;justify-content:center;
+      padding:0 5vw !important; overflow:hidden;
   }}
-  .block-container {{
-      padding:0 !important; margin:0 !important; height:100%;
-  }}
+  .wrap-max{{width:min(1200px,96vw);}}
 
-  /* GRID 2 colunas ocupando a tela inteira */
-  .wrap-screen {{
-      display:grid; grid-template-columns: 1.1fr 1fr;
-      height:100vh; width:100vw; overflow:hidden;
-  }}
-
-  /* Coluna esquerda: logo */
-  .left {{
-      display:flex; align-items:center; justify-content:flex-start;
-  }}
-  .left-inner {{ margin-left:6vw; }}
-  /* LOGO MENOR (clamp reduzido) */
-  .left-inner img {{
-      width:clamp(180px, 24vw, 300px);
-      filter:drop-shadow(0 24px 48px rgba(0,0,0,.35));
-      margin:0;
-  }}
-
-  /* Coluna direita: card centralizado */
-  .right {{
-      display:flex; align-items:center; justify-content:center;
-      background: linear-gradient(180deg, rgba(11,32,56,.35), rgba(14,39,68,.55));
-      padding: 0 28px;
-      color:#e8f0ff;
-  }}
-  .glass {{
-      width:min(480px, 92vw);
-      background:rgba(10,25,40,.44);
-      -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px);
-      border:1px solid rgba(255,255,255,.45);
-      border-radius:22px; box-shadow:0 24px 60px rgba(0,0,0,.35);
-      padding:22px 22px 18px;
-      margin:0;  /* sem margens extras */
+/* logo + card glass */
+  .logo img{{width:clamp(240px,30vw,380px);filter:drop-shadow(0 24px 48px rgba(0,0,0,.35));}}
+  .glass{{
+    background:rgba(10,25,40,.44);
+    -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);
+    border:1px solid rgba(255,255,255,.45);
+    border-radius:22px;box-shadow:0 24px 60px rgba(0,0,0,.35);
+    padding:24px;color:#fff;
   }}
   .glass h3{{margin:0 0 10px;font-weight:800;text-shadow:0 2px 8px rgba(0,0,0,.35);}}
   .glass [data-testid="stCaptionContainer"]{{opacity:.98;text-shadow:0 1px 6px rgba(0,0,0,.35);}}
 
-  /* Inputs e botões */
   .stTextInput>div>div>input,.stPassword>div>div>input{{height:46px;font-size:16px;}}
   .stButton>button{{
-      height:46px;font-size:16px;background:{BRAND_ORANGE}!important;color:#fff;border:none;border-radius:12px;
-      box-shadow:0 6px 18px rgba(243,115,33,.35); font-weight:800;
+    height:46px;font-size:16px;background:{BRAND_ORANGE}!important;color:#fff;border:none;border-radius:12px;
+    box-shadow:0 6px 18px rgba(243,115,33,.35); font-weight:800;
   }}
-
-  /* Tira espaços “fantasmas” do Streamlit */
   div[data-testid="stVerticalBlock"]>div:empty{{display:none;}}
-  .element-container:has(> .stAlert) {{ margin-top:8px; }}
-
-  /* Responsivo: em telas menores, só o form (sem logo) */
-  @media (max-width: 980px) {{
-     .wrap-screen {{ grid-template-columns: 1fr; }}
-     .left {{ display:none; }}
-  }}
 </style>
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------
-# Supabase client (sem quebrar a UI se faltar credencial)
+# Supabase client (trata faltas de credenciais sem quebrar a UI)
 # ------------------------------------------------------------
 supabase_ok = True
 s = None
@@ -140,52 +102,44 @@ except Exception as e:
     config_msg = f"Erro inesperado: {e}"
 
 # ------------------------------------------------------------
-# UI — LOGIN (estrutura HTML fixa + widgets)
+# UI — LOGIN
 # ------------------------------------------------------------
 inject_css_login()
+st.markdown('<div class="wrap-max">', unsafe_allow_html=True)
+c1, c2 = st.columns([1, 1], gap="large")
 
-st.markdown(
-    """
-<div class="wrap-screen">
-  <div class="left">
-    <div class="left-inner">
-      <img src="assets/logo_family_finance.png" alt="Family Finance"/>
-    </div>
-  </div>
-  <div class="right">
-    <div class="glass">
-      <h3>Entrar no Family Finance</h3>
-      <div class="ff-muted">Use suas credenciais para continuar.</div>
-    </div>
-  </div>
-</div>
-""",
-    unsafe_allow_html=True,
-)
+with c1:
+    st.markdown('<div class="logo">', unsafe_allow_html=True)
+    if LOGO: st.image(str(LOGO))
+    else: st.markdown('<h1 style="color:#fff;font-weight:900;margin:0;">Family Finance</h1>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# Renderiza o form dentro do card, sem criar blocos acima/abaixo
-card = st.container()
-with card:
+with c2:
+    st.markdown('<div class="glass">', unsafe_allow_html=True)
+    st.markdown("<h3>Entrar no Family Finance</h3>", unsafe_allow_html=True)
+    st.caption("Use suas credenciais para continuar.")
     with st.form("login_form", clear_on_submit=False):
         email = st.text_input("E-mail", placeholder="seu e-mail")
         password = st.text_input("Senha", type="password", placeholder="sua senha")
-        c1, c2 = st.columns(2)
-        btn_login  = c1.form_submit_button("Entrar", type="primary", use_container_width=True)
-        btn_signup = c2.form_submit_button("Criar conta", use_container_width=True)
+        a, b = st.columns([1, 1])
+        btn_login  = a.form_submit_button("Entrar", type="primary", use_container_width=True)
+        btn_signup = b.form_submit_button("Criar conta", use_container_width=True)
     feedback = st.empty()
+    st.markdown("</div>", unsafe_allow_html=True)
 
-# Sem secrets? mostra instruções compactas (não poluir layout)
+st.markdown("</div>", unsafe_allow_html=True)
+
+# Se faltam credenciais, mostra instrução e para por aqui (sem quebrar layout)
 if not supabase_ok:
-    with st.expander("⚙️ Como configurar o Supabase (clique)"):
+    st.warning("Configuração do Supabase ausente.")
+    with st.expander("Como configurar (Streamlit Cloud ou local)"):
         st.code(
             """[supabase]
 url = "https://SEU-PROJETO.supabase.co"
-# aceita 'key' ou 'anon_key'
+# aceite 'key' ou 'anon_key'
 key = "SUA_KEY_AQUI"
-""",
-            language="toml",
-        )
-        st.text(config_msg)
+""", language="toml")
+    st.error(config_msg)
     st.stop()
 
 def _valid():
@@ -196,7 +150,7 @@ def _valid():
     return True
 
 def _go_home():
-    st.switch_page("pages/1_Entrada.py")
+    st.switch_page("pages/1_Entrada.py")  # seu destino imediato pós-login
 
 # Ações
 if btn_login and _valid():
@@ -205,7 +159,7 @@ if btn_login and _valid():
         auth = s.auth.sign_in_with_password({"email": email.strip(), "password": password})
         user = getattr(auth, "user", None)
         if user and user.id:
-            bootstrap(user.id)
+            bootstrap(user.id)   # garante household/member e grava na sessão
             _go_home()
         else:
             feedback.error("Não foi possível autenticar. Verifique credenciais.")
@@ -216,10 +170,12 @@ if btn_signup and _valid():
     try:
         st.toast("Criando sua conta...", icon="🆕")
         s.auth.sign_up({"email": email.strip(), "password": password})
+        # opcional: auto-login
         auth = s.auth.sign_in_with_password({"email": email.strip(), "password": password})
         user = getattr(auth, "user", None)
         if user and user.id:
-            bootstrap(user.id); _go_home()
+            bootstrap(user.id)
+            _go_home()
         else:
             feedback.success("Conta criada. Verifique seu e-mail para confirmar.")
     except Exception as e:
