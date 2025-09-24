@@ -184,9 +184,9 @@ if not supabase_ok:
     with st.expander("Como configurar (Streamlit Cloud ou local)"):
         st.code(
             """[supabase]
-url = "https://SEU-PROJETO.supabase.co"
+url = "https://uqblgzkffoyotqgsdski.supabase.co"
 # aceite 'key' ou 'anon_key'
-key = "SUA_KEY_AQUI"
+key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVxYmxnemtmZm95b3RxZ3Nkc2tpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTg2NTIwNDcsImV4cCI6MjA3NDIyODA0N30.jZVyC-hAZLgxSCeoUxPlHNfFg8dZKEsYqJlpPn7NPKo"
 """, language="toml")
     st.error(config_msg)
     st.stop()
