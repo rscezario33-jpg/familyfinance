@@ -1,9 +1,9 @@
-# app.py — Family Finance (Login revisto P0)
+# app.py — Family Finance (Login revisto P0 + tratamento de config)
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import streamlit as st
-from supabase_client import get_supabase
+from supabase_client import get_supabase, FFConfigError
 from ff_shared import bootstrap
 
 st.set_page_config(page_title="Family Finance — Login", layout="wide", page_icon="💸")
@@ -99,10 +99,67 @@ html, body, [data-testid="stAppViewContainer"]{height:100%;}
     unsafe_allow_html=True,
 )
 
-# ===== Formulário no container (evita quebrar layout da grid) =====
+# ===== Tentar inicializar o Supabase (sem quebrar UI se faltar config) =====
+supabase_ok = True
+supabase_client = None
+config_error_msg = ""
+
+try:
+    supabase_client = get_supabase()
+except FFConfigError as e:
+    supabase_ok = False
+    config_error_msg = str(e)
+except Exception as e:
+    supabase_ok = False
+    config_error_msg = f"Erro inesperado ao inicializar Supabase: {e}"
+
+# ===== Se não houver config, mostrar instruções claras =====
+if not supabase_ok:
+    st.markdown("### ⚙️ Configuração necessária")
+    st.info(
+        "Para continuar, você precisa definir as credenciais do **Supabase**. "
+        "Você pode usar **st.secrets** (recomendado) ou variáveis de ambiente."
+    )
+    col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("#### Opção A — Local (`.streamlit/secrets.toml`)")
+        st.code(
+            """# .streamlit/secrets.toml
+[supabase]
+url = "https://SEU-PROJETO.supabase.co"
+key = "SUA_SUPABASE_ANON_OU_SERVICE_KEY"
+""",
+            language="toml",
+        )
+        st.markdown(
+            "- Salve esse arquivo na **raiz do projeto** dentro de `.streamlit/`.\n"
+            "- Rode o app: `streamlit run app.py`."
+        )
+    with col2:
+        st.markdown("#### Opção B — Streamlit Cloud (Secrets)")
+        st.markdown(
+            "No painel do app → **Settings** → **Secrets** → cole o mesmo conteúdo acima "
+            "e salve. Depois **redeploy**."
+        )
+
+    st.markdown("#### Fallback — Variáveis de ambiente")
+    st.code(
+        """# Linux/macOS
+export SUPABASE_URL="https://SEU-PROJETO.supabase.co"
+export SUPABASE_KEY="SUA_SUPABASE_KEY"
+
+# Windows (PowerShell)
+setx SUPABASE_URL "https://SEU-PROJETO.supabase.co"
+setx SUPABASE_KEY "SUA_SUPABASE_KEY"
+""",
+        language="bash",
+    )
+    st.error(config_error_msg)
+    st.stop()
+
+# ===== Formulário no container (somente se Supabase OK) =====
 with st.container():
     st.write("")  # espaçador visual
-    s = get_supabase()
 
     # Form padrão com ENTER para enviar
     with st.form("ff_login_form", clear_on_submit=False):
@@ -133,7 +190,7 @@ with st.container():
         if _valid_inputs():
             try:
                 st.toast("Entrando...", icon="🔐")
-                auth = s.auth.sign_in_with_password({"email": email.strip(), "password": pwd})
+                auth = supabase_client.auth.sign_in_with_password({"email": email.strip(), "password": pwd})
                 user = getattr(auth, "user", None)
                 if user and user.id:
                     bootstrap(user.id)
@@ -147,9 +204,9 @@ with st.container():
         if _valid_inputs():
             try:
                 st.toast("Criando sua conta...", icon="🆕")
-                s.auth.sign_up({"email": email.strip(), "password": pwd})
+                supabase_client.auth.sign_up({"email": email.strip(), "password": pwd})
                 # Opcional: auto-login após cadastro
-                auth = s.auth.sign_in_with_password({"email": email.strip(), "password": pwd})
+                auth = supabase_client.auth.sign_in_with_password({"email": email.strip(), "password": pwd})
                 user = getattr(auth, "user", None)
                 if user and user.id:
                     bootstrap(user.id)
