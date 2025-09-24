@@ -1,4 +1,4 @@
-# app.py — Family Finance v8.2.0 # (Visual profissional, dashboard e charts Plotly)
+# app.py — Family Finance v8.2.1 # (Remoção de cache para supabase_client)
 from __future__ import annotations
 from datetime import date, datetime, timedelta
 import uuid
@@ -365,7 +365,7 @@ notify_due_bills(sb, st.session_state.HOUSEHOLD_ID, st.session_state.user)
 
 
 # ========================= # Funções para Buscar Dados do Dashboard # =========================
-@st.cache_data(ttl=300) # Cache por 5 minutos
+# REMOVIDO: @st.cache_data(ttl=300)
 def get_dashboard_data(supabase_client, household_id):
     today = date.today()
     first_day_current_month = today.replace(day=1)
@@ -385,26 +385,33 @@ def get_dashboard_data(supabase_client, household_id):
 
     # --- Evolução Mensal (Últimos 6 meses) ---
     monthly_data = []
-    for i in range(6): # Últimos 6 meses
-        month_start = (first_day_current_month - timedelta(days=30*i)).replace(day=1)
-        month_end = (month_start.replace(month=month_start.month % 12 + 1, day=1) - timedelta(days=1)) if month_start.month != 12 else month_start.replace(year=month_start.year + 1, month=1, day=1) - timedelta(days=1)
+    # Itera sobre os últimos 6 meses, incluindo o mês atual se houver dados
+    for i in range(6): 
+        # Calcula o primeiro dia do mês 'i' meses atrás
+        month_start_calc = (today.replace(day=1) - pd.DateOffset(months=i)).to_timestamp().date()
         
-        # Ajusta month_end para não ser no futuro
-        if month_end > today:
-            month_end = today
+        # Calcula o último dia do mês 'i' meses atrás
+        # O último dia é o primeiro dia do próximo mês menos um dia
+        next_month_start = (today.replace(day=1) - pd.DateOffset(months=i-1)).to_timestamp().date()
+        month_end_calc = next_month_start - timedelta(days=1)
         
-        txs = fetch_tx(supabase_client, household_id, month_start, month_end)
+        # Garante que month_end_calc não ultrapasse today se for o mês atual
+        if month_end_calc > today:
+            month_end_calc = today
+        
+        txs = fetch_tx(supabase_client, household_id, month_start_calc, month_end_calc)
         
         income = sum(t.get("planned_amount", 0) for t in txs if t.get("type") == "income")
         expense = sum(t.get("planned_amount", 0) for t in txs if t.get("type") == "expense")
         
         monthly_data.append({
-            "Mês": month_start.strftime("%Y-%m"),
+            "Mês": month_start_calc.strftime("%Y-%m"),
             "Receitas": income,
             "Despesas": expense,
             "Saldo": income - expense
         })
     monthly_df = pd.DataFrame(monthly_data).sort_values("Mês", ascending=True)
+
 
     return {
         "current_month_income": total_income_current_month,
@@ -419,7 +426,9 @@ def get_dashboard_data(supabase_client, household_id):
 # ========================= # Conteúdo da Página Principal (Dashboard) # =========================
 st.markdown('<h1 class="dashboard-title">✨ Dashboard Financeiro Familiar</h1>', unsafe_allow_html=True)
 
-dashboard_data = get_dashboard_data(sb, st.session_state.HOUSEHOLD_ID)
+# Centraliza o spinner para carregar os dados
+with st.spinner("Carregando dados do dashboard..."):
+    dashboard_data = get_dashboard_data(sb, st.session_state.HOUSEHOLD_ID)
 
 # --- Visão Geral do Mês ---
 st.markdown("<h2>Visão Geral do Mês Atual</h2>", unsafe_allow_html=True)
