@@ -225,6 +225,26 @@ section[data-testid="stSidebar"] .stButton:last-of-type button:hover{
 
 /* Esconde nav se não autenticado */
 body:not(:has(.user-email-display)) div[data-testid="stSidebarNav"]{ display:none !important; }
+
+/* ===== EXTRA: botão Sair sempre largo via wrapper .ff-logout ===== */
+.ff-logout button{
+  display:block !important;
+  width: calc(100% - 32px) !important;
+  margin: 10px 16px 4px 16px !important;
+  border-radius: 14px !important;
+  background: var(--danger) !important;
+  border:1px solid var(--danger) !important;
+  color:#fff !important;
+  font-weight:700 !important;
+  padding:10px 0 !important;
+  box-shadow: 0 8px 18px rgba(0,0,0,.22) !important;
+  transition: transform .16s ease, background .16s ease;
+}
+.ff-logout button:hover{
+  background: var(--danger-700) !important;
+  border-color: var(--danger-700) !important;
+  transform: translateY(-1px);
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -232,6 +252,24 @@ body:not(:has(.user-email-display)) div[data-testid="stSidebarNav"]{ display:non
 if "sb" not in st.session_state:
     st.session_state.sb = get_supabase()
 sb = st.session_state.sb
+
+# =========================
+# (NOVO) Captura de token ?join= para convite por link
+# =========================
+def _capture_join_token():
+    try:
+        qp = st.query_params  # Streamlit >= 1.32
+        tok = qp.get("join")
+    except Exception:
+        tok = None
+        try:
+            tok = st.experimental_get_query_params().get("join", [None])[0]
+        except Exception:
+            pass
+    if tok:
+        st.session_state["pending_join_token"] = tok
+
+_capture_join_token()
 
 # ========================= # Auth wrappers # =========================
 def _signin(email, password):
@@ -269,6 +307,10 @@ with st.sidebar:
         st.session_state.auth_ok = False
 
     if not st.session_state.auth_ok:
+        # dica visual se veio por convite
+        if st.session_state.get("pending_join_token"):
+            st.info("Convite detectado. Faça login/crie conta para entrar na família do convite.")
+
         st.markdown('<div class="sidebar-title">Acesso à Plataforma</div>', unsafe_allow_html=True)
         email = st.text_input("Email").strip()
         pwd = st.text_input("Senha", type="password")
@@ -315,8 +357,11 @@ with st.sidebar:
 
     st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)  # linha antes do sair
 
+    # (AJUSTE) wrapper para botão sair ter largura garantida
+    st.markdown('<div class="ff-logout">', unsafe_allow_html=True)
     if st.button("Sair", key="sidebar_logout_button"):
         _signout()
+    st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)  # linha depois do sair
 
@@ -327,11 +372,43 @@ with st.sidebar:
 
 # ========================= # Bootstrap household/member # =========================
 if st.session_state.auth_ok and "HOUSEHOLD_ID" not in st.session_state:
+    def _accept_by_token_if_any(client):
+        token = st.session_state.pop("pending_join_token", None)
+        if not token:
+            return
+        try:
+            client.rpc("accept_invite_by_token", {"p_token": token}).execute()
+        except Exception:
+            pass
+
+    def _find_membership(client, user_id: str):
+        try:
+            data = client.table("members").select("id, household_id").eq("user_id", user_id).limit(1).execute().data
+            if data:
+                return {"household_id": data[0]["household_id"], "member_id": data[0]["id"]}
+        except Exception:
+            pass
+        return None
+
     def bootstrap(user_id: str, supabase_client):
+        # 1) tenta aceitar convite via token de URL (se houver)
+        _accept_by_token_if_any(supabase_client)
+
+        # 2) se já virou membro, usa
+        m = _find_membership(supabase_client, user_id)
+        if m:
+            return m
+
+        # 3) fallback: aceita convites pendentes por e-mail (se você manter essa função)
         try:
             supabase_client.rpc("accept_pending_invite").execute()
         except Exception:
             pass
+        m = _find_membership(supabase_client, user_id)
+        if m:
+            return m
+
+        # 4) cria nova família (caso realmente não haja convite)
         try:
             res = supabase_client.rpc("create_household_and_member", {"display_name": "Você"}).execute().data
         except Exception as e:
@@ -359,6 +436,25 @@ if not (st.session_state.auth_ok and "HOUSEHOLD_ID" in st.session_state):
     st.stop()
 
 notify_due_bills(sb, st.session_state.HOUSEHOLD_ID, st.session_state.user)
+
+# =========================
+# (NOVO) Renomear item "app" -> "🏠 Home" na navegação nativa sem renomear arquivo
+# =========================
+st.markdown("""
+<script>
+const fixNav = () => {
+  const nav = document.querySelector('div[data-testid="stSidebarNav"]');
+  if(!nav) return;
+  const links = nav.querySelectorAll('a');
+  links.forEach(a => {
+    if(a.textContent.trim().toLowerCase() === 'app'){
+      a.textContent = '🏠 Home';
+    }
+  });
+};
+setTimeout(fixNav, 60);
+</script>
+""", unsafe_allow_html=True)
 
 # ========================= # Dados do Dashboard # =========================
 def get_dashboard_data(supabase_client, household_id):
