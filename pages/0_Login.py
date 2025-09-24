@@ -1,12 +1,12 @@
-# pages/0_Login.py — Family Finance • Login com Supabase + layout glass
+# pages/0_Login.py — Family Finance • Responsive Login with Supabase + Glass Layout
 from __future__ import annotations
 
 import base64
 from pathlib import Path
 import streamlit as st
 
-from supabase_client import get_supabase, FFConfigError  # usa a versão que te passei
-from ff_shared import bootstrap  # idempotente (household/member)
+from supabase_client import get_supabase, FFConfigError  # project integration
+from ff_shared import bootstrap  # project integration
 
 st.set_page_config(
     page_title="Login • Family Finance",
@@ -27,14 +27,13 @@ def pick(*names: str) -> Path | None:
             return p
     return None
 
-# mantém os nomes que você já tem no projeto
 LOGO = pick("logo_family_finance.png", "logo_family_finance.jpg", "logo.png")
-BG   = pick("Backgroud_FF.png", "Background_FF.png", "background.png")  # inclui ambas grafias
+BG   = pick("Backgroud_FF.png", "Background_FF.png", "background.png")
 
 BRAND_ORANGE = "#F37321"
 
 # ------------------------------------------------------------
-# CSS helpers (mesmo conceito do layout que você anexou)
+# CSS helpers — Responsive adjustments for all screens
 # ------------------------------------------------------------
 def _b64(p: Path | None) -> str | None:
     if not p: return None
@@ -44,39 +43,88 @@ def _b64(p: Path | None) -> str | None:
         return None
 
 def inject_css_login():
-    """Tela de login (fundo imagem + card glass), sem rolagem e conteúdo centralizado."""
+    """Responsive login: background, glass card, and responsive layout."""
     bg64 = _b64(BG)
     if bg64:
         bg_css = f'''.stApp{{background:url("data:image/png;base64,{bg64}") no-repeat center/cover fixed;}}'''
     else:
         bg_css = '''.stApp{background:linear-gradient(120deg,#0B2038,#0E2744);}'''
+
     st.markdown(f"""
 <style>
   header,#MainMenu,footer{{visibility:hidden;}}
   section[data-testid='stSidebar']{{display:none;}}
-
   {bg_css}
-
   html,body,.stApp{{height:100%;}}
-  .block-container{{
-      min-height:100vh;
-      display:flex;align-items:center;justify-content:center;
-      padding:0 5vw !important; overflow:hidden;
-  }}
-  .wrap-max{{width:min(1200px,96vw);}}
 
-/* logo + card glass */
-  .logo img{{width:clamp(240px,30vw,380px);filter:drop-shadow(0 24px 48px rgba(0,0,0,.35));}}
+  .block-container {{
+      min-height:100vh;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:0 5vw !important;
+      overflow:hidden;
+  }}
+  .wrap-max {{
+      width:min(1200px,96vw);
+      display: flex;
+      flex-direction: row;
+      gap: 5vw;
+      justify-content: center;
+      align-items: center;
+  }}
+  /* Mobile responsive styles */
+  @media (max-width: 800px) {{
+    .wrap-max {{
+      flex-direction: column !important;
+      gap: 36px !important;
+    }}
+    .logo img {{
+      width: clamp(160px,35vw,240px) !important;
+    }}
+    .glass {{
+      width: 100% !important;
+      max-width: 450px !important;
+      margin: 0 auto !important;
+      padding: 18px 8px !important;
+    }}
+  }}
+  @media (max-width: 480px) {{
+    .block-container {{
+      padding: 0 2vw !important;
+    }}
+    .wrap-max {{
+      gap: 20px !important;
+    }}
+    .logo img {{
+      width: 80vw !important;
+      min-width: 120px !important;
+      max-width: 220px !important;
+    }}
+    .glass {{
+      padding: 12px 4px !important;
+    }}
+  }}
+  .logo img{{
+    width:clamp(200px,28vw,380px);
+    filter:drop-shadow(0 24px 48px rgba(0,0,0,.35));
+    display:block;
+    margin:0 auto 12px auto;
+  }}
   .glass{{
     background:rgba(10,25,40,.44);
     -webkit-backdrop-filter:blur(14px);backdrop-filter:blur(14px);
     border:1px solid rgba(255,255,255,.45);
-    border-radius:22px;box-shadow:0 24px 60px rgba(0,0,0,.35);
-    padding:24px;color:#fff;
+    border-radius:22px;
+    box-shadow:0 24px 60px rgba(0,0,0,.35);
+    padding:24px;
+    color:#fff;
+    width: 375px;
+    max-width: 98vw;
+    margin: 0 auto;
   }}
   .glass h3{{margin:0 0 10px;font-weight:800;text-shadow:0 2px 8px rgba(0,0,0,.35);}}
   .glass [data-testid="stCaptionContainer"]{{opacity:.98;text-shadow:0 1px 6px rgba(0,0,0,.35);}}
-
   .stTextInput>div>div>input,.stPassword>div>div>input{{height:46px;font-size:16px;}}
   .stButton>button{{
     height:46px;font-size:16px;background:{BRAND_ORANGE}!important;color:#fff;border:none;border-radius:12px;
@@ -87,7 +135,7 @@ def inject_css_login():
 """, unsafe_allow_html=True)
 
 # ------------------------------------------------------------
-# Supabase client (trata faltas de credenciais sem quebrar a UI)
+# Supabase client (connection)
 # ------------------------------------------------------------
 supabase_ok = True
 s = None
@@ -102,10 +150,11 @@ except Exception as e:
     config_msg = f"Erro inesperado: {e}"
 
 # ------------------------------------------------------------
-# UI — LOGIN
+# UI — Responsive LOGIN
 # ------------------------------------------------------------
 inject_css_login()
 st.markdown('<div class="wrap-max">', unsafe_allow_html=True)
+# Responsive: use columns only for wide screens, stack otherwise (handled by CSS)
 c1, c2 = st.columns([1, 1], gap="large")
 
 with c1:
@@ -129,7 +178,7 @@ with c2:
 
 st.markdown("</div>", unsafe_allow_html=True)
 
-# Se faltam credenciais, mostra instrução e para por aqui (sem quebrar layout)
+# Supabase config missing
 if not supabase_ok:
     st.warning("Configuração do Supabase ausente.")
     with st.expander("Como configurar (Streamlit Cloud ou local)"):
@@ -150,16 +199,16 @@ def _valid():
     return True
 
 def _go_home():
-    st.switch_page("pages/1_Entrada.py")  # seu destino imediato pós-login
+    st.switch_page("pages/1_Entrada.py")
 
-# Ações
+# Actions
 if btn_login and _valid():
     try:
         st.toast("Entrando...", icon="🔐")
         auth = s.auth.sign_in_with_password({"email": email.strip(), "password": password})
         user = getattr(auth, "user", None)
         if user and user.id:
-            bootstrap(user.id)   # garante household/member e grava na sessão
+            bootstrap(user.id)
             _go_home()
         else:
             feedback.error("Não foi possível autenticar. Verifique credenciais.")
