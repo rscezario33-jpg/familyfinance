@@ -1,4 +1,4 @@
-# app.py — Family Finance v8.3.0 # (KeyError fix, sidebar custom navigation, page content routing)
+# app.py — Family Finance v8.4.0 # (Sidebar navigation refined)
 from __future__ import annotations
 from datetime import date, datetime, timedelta
 import uuid
@@ -220,6 +220,54 @@ section[data-testid="stSidebar"] img {
     color: #0b2038;
     margin-bottom: 15px;
 }
+
+/* NOVO: Estilo para o st.radio na sidebar (navegação) */
+section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] {
+    margin-top: 15px; /* Espaço acima do grupo de botões */
+}
+section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] > label {
+    font-size: 1rem; /* Ajusta o tamanho da fonte dos itens do menu */
+    font-weight: 500;
+    padding: 10px 15px; /* Preenchimento para cada item */
+    margin: 4px 8px; /* Margem entre os itens */
+    border-radius: 8px; /* Cantos arredondados */
+    transition: all 0.2s ease-in-out;
+    cursor: pointer;
+    display: flex; /* Para alinhar ícone e texto */
+    align-items: center;
+    gap: 10px; /* Espaço entre ícone e texto */
+}
+
+/* Estilo para o item de rádio SELECIONADO na sidebar */
+section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] > label:has(input[aria-checked="true"]) {
+    background-color: #0ea5e9; /* Fundo azul para o selecionado */
+    color: white !important; /* Texto branco */
+    font-weight: 600;
+    box-shadow: 0 2px 8px rgba(0,165,233,0.3); /* Sombra para destaque */
+}
+
+/* Efeito hover para os itens de rádio */
+section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] > label:hover:not(:has(input[aria-checked="true"])) {
+    background-color: rgba(14, 165, 233, 0.2); /* Azul claro no hover */
+    color: #e0f2ff !important;
+}
+
+/* Esconde o botão de rádio padrão (o círculo) */
+section[data-testid="stSidebar"] .stRadio input[type="radio"] {
+    display: none;
+}
+
+/* Ajuste para o botão Sair na sidebar */
+section[data-testid="stSidebar"] .stButton > button {
+    width: calc(100% - 16px); /* Para ocupar a largura da sidebar, considerando a margem */
+    margin: 10px 8px;
+    background:#ef4444; /* Cor de saída */
+    border-color:#ef4444;
+}
+section[data-testid="stSidebar"] .stButton > button:hover {
+    background:#dc2626;
+    border-color:#dc2626;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -252,7 +300,7 @@ def _user():
     sess = sb.auth.get_session()
     return sess.user if sess and sess.user else None
 
-# ========================= # Sidebar (logos 50% + Powered by) # =========================
+# ========================= # Sidebar # =========================
 with st.sidebar:
     # Logo Family Finance no topo, centralizada
     st.image("assets/logo_family_finance.png", width=110)
@@ -305,10 +353,10 @@ with st.sidebar:
     st.caption(f"Logado: {user.email if user else ''}")
     st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
 
-    # --- NOVO: Navegação Customizada após o Login ---
+    # --- Navegação Customizada após o Login ---
     if st.session_state.auth_ok:
         st.markdown('<div class="sidebar-title">Navegação</div>', unsafe_allow_html=True)
-        # Opções de navegação com ícones
+        
         navigation_options = {
             "🏠 Home": "home",
             "💸 Lançamentos": "lancamentos",
@@ -316,25 +364,23 @@ with st.sidebar:
             "👥 Membros": "membros",
             "⚙️ Configurações": "configuracoes"
         }
-        # Define a página padrão se não houver seleção
+        
         if "current_page" not in st.session_state:
             st.session_state.current_page = "home"
 
         selected_page_label = st.radio(
-            "Ir para",
+            "Ir para", # Label para o grupo, será escondida com CSS ou label_visibility
             list(navigation_options.keys()),
             index=list(navigation_options.keys()).index(next(key for key, value in navigation_options.items() if value == st.session_state.current_page)),
-            key="main_navigation_radio"
+            key="main_navigation_radio",
+            label_visibility="collapsed" # Esconde o rótulo "Ir para"
         )
         st.session_state.current_page = navigation_options[selected_page_label]
         
         st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
-        if st.button("Sair"):
-            _signout()
-            st.rerun()
+        st.button("Sair") # Botão de Sair com estilo customizado
         st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
-    # --- FIM DA MODIFICAÇÃO DA NAVEGAÇÃO ---
-
+    
     # Logo AutomaGO no rodapé, centralizada
     st.markdown('<div class="small" style="text-align:center;opacity:.9;">Powered by</div>', unsafe_allow_html=True)
     st.image("assets/logo_automaGO.png", width=80)
@@ -413,7 +459,8 @@ def get_dashboard_data(supabase_client, household_id):
 
     # --- Evolução Mensal (Últimos 6 meses) ---
     monthly_data = []
-    for i in range(6): # Últimos 6 meses (do atual para trás)
+    # Itera sobre os últimos 6 meses, incluindo o mês atual se houver dados
+    for i in range(6): 
         # Calcula o primeiro dia do mês 'i' meses atrás
         month_date = today - relativedelta(months=i)
         month_start_calc = month_date.replace(day=1)
@@ -424,7 +471,7 @@ def get_dashboard_data(supabase_client, household_id):
         else:
             month_end_calc = date(month_date.year, month_date.month + 1, 1) - timedelta(days=1)
 
-        # Garante que month_end_calc não vá além de hoje para o mês atual
+        # Garante que month_end_calc não vá além de hoje se for o mês atual
         if month_end_calc > today:
             month_end_calc = today
         
@@ -484,7 +531,7 @@ def show_home_dashboard():
         saldo_color = "#22c55e" if dashboard_data["current_month_balance"] >= 0 else "#ef4444"
         st.markdown(f"""
         <div class="metric-box">
-            <h3>📊 Saldo <span style="color:{saldo_color};"></span></h3>
+            <h3>�� Saldo <span style="color:{saldo_color};"></span></h3>
             <div class="value" style="color:{saldo_color};">{to_brl(dashboard_data["current_month_balance"])}</div>
             <div class="delta">Resultado financeiro até hoje</div>
         </div>
