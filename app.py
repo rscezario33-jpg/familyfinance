@@ -1,4 +1,4 @@
-# app.py — Family Finance v8.3.0 # (KeyError fix, sidebar custom navigation, page content routing)
+# app.py — Family Finance v8.5.0 # (Sidebar com navegação nativa repositionada e estilizada)
 from __future__ import annotations
 from datetime import date, datetime, timedelta
 import uuid
@@ -9,13 +9,14 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
-from dateutil.relativedelta import relativedelta # Adicionado para cálculo de datas
+from dateutil.relativedelta import relativedelta
 
 # Importações de módulos locais
 from supabase_client import get_supabase
 from utils import to_brl, _to_date_safe, fetch_tx, fetch_members, notify_due_bills
 
-st.set_page_config(page_title="Family Finance", layout="wide")
+# Configurações da página principal (Dashboard)
+st.set_page_config(page_title="🏠 Home", layout="wide")
 
 # ========================= # CSS (visual + contraste sidebar + dashboard) # =========================
 st.markdown("""
@@ -44,7 +45,8 @@ section[data-testid="stSidebar"] label,
 section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] > div,
 section[data-testid="stSidebar"] .stMarkdown,
 section[data-testid="stSidebar"] p,
-section[data-testid="stSidebar"] span {
+section[data-testid="stSidebar"] span,
+section[data-testid="stSidebar"] a { /* Adicionado 'a' para links da navegação nativa */
     color:#f0f6ff !important;
 }
 /* Imagens e títulos da sidebar */
@@ -220,11 +222,120 @@ section[data-testid="stSidebar"] img {
     color: #0b2038;
     margin-bottom: 15px;
 }
+
+/* ========================================================================= */
+/* NOVO CSS: Reposicionamento e Estilização da Navegação Nativa na Sidebar */
+/* ========================================================================= */
+
+/* Garante que o container principal da sidebar seja flex para reordenar itens */
+section[data-testid="stSidebar"] > div > div.stVerticalBlock:first-of-type {
+    display: flex;
+    flex-direction: column;
+    height: 100%; /* Ocupa a altura total para o flex-grow funcionar */
+}
+
+/* Ordem e estilos para elementos fixos da sidebar */
+section[data-testid="stSidebar"] img[src*="logo_family_finance"] { order: 1; margin-bottom: 14px; }
+section[data-testid="stSidebar"] .sidebar-group:nth-of-type(1) { order: 2; } /* Primeiro divisor */
+
+/* Informações do usuário logado */
+.user-email-display {
+    order: 3;
+    margin-bottom: 10px;
+    padding-left: 10px;
+    font-size: 0.9rem;
+    color: #f0f6ff;
+    opacity: 0.8;
+}
+
+section[data-testid="stSidebar"] .sidebar-group:nth-of-type(2) { order: 4; } /* Segundo divisor */
+
+/* NAVEGAÇÃO DE PÁGINAS NATIVA DO STREAMLIT */
+/* Elemento que contém a lista de links das páginas */
+section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] {
+    order: 5; /* Posiciona após o email do usuário */
+    flex-grow: 1; /* Ocupa o espaço restante, empurrando itens para o rodapé */
+    display: flex; /* Torna o conteúdo flexível para centralizar */
+    flex-direction: column;
+    justify-content: center; /* Centraliza verticalmente os itens de navegação */
+    padding-top: 15px;
+    padding-bottom: 15px;
+}
+
+/* Estilização dos links de navegação nativos */
+section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] ul {
+    list-style: none;
+    padding: 0;
+    margin: 0; /* Remove margens padrão de lista */
+}
+section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] li {
+    padding: 0;
+    margin: 0;
+}
+section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] li a {
+    font-size: 1rem;
+    font-weight: 500;
+    padding: 10px 15px;
+    margin: 4px 8px;
+    border-radius: 8px;
+    transition: all 0.2s ease-in-out;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #f0f6ff !important; /* Cor padrão do link */
+    text-decoration: none;
+}
+/* Estilo para link ATIVO */
+section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] li a.active {
+    background-color: #0ea5e9;
+    color: white !important;
+    font-weight: 600;
+    box-shadow: 0 2px 8px rgba(0,165,233,0.3);
+}
+/* Efeito HOVER */
+section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] li a:hover:not(.active) {
+    background-color: rgba(14, 165, 233, 0.2);
+    color: #e0f2ff !important;
+}
+
+/* Esconde o cabeçalho do expander se as páginas estiverem agrupadas (opcional) */
+section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] .stExpander > div > div:first-child {
+    display: none;
+}
+/* Remove padding extra de expander */
+section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] .stExpander div[data-testid="stVerticalBlock"] {
+    padding: 0;
+}
+
+section[data-testid="stSidebar"] .sidebar-group:nth-of-type(3) { order: 6; } /* Terceiro divisor, após navegação */
+
+/* Botão Sair */
+section[data-testid="stSidebar"] .stButton:last-of-type button { /* Ultimo botão na sidebar é o Sair */
+    order: 7;
+    width: calc(100% - 16px);
+    margin: 10px 8px;
+    background:#ef4444;
+    border-color:#ef4444;
+}
+section[data-testid="stSidebar"] .stButton:last-of-type button:hover {
+    background:#dc2626;
+    border-color:#dc2626;
+}
+
+section[data-testid="stSidebar"] .sidebar-group:nth-of-type(4) { order: 8; } /* Quarto divisor */
+section[data-testid="stSidebar"] .small { order: 9; } /* Texto "Powered by" */
+section[data-testid="stSidebar"] img[src*="logo_automaGO"] { order: 10; margin-top: 14px; } /* Logo AutomaGO */
+
+/* Esconde a navegação de páginas nativa quando NÃO autenticado (garantia) */
+body:not(:has(.user-email-display)) div[data-testid="stSidebarNav"] {
+    display: none !important;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
 # ========================= # Conexão Supabase # =========================
-# O cliente Supabase é inicializado uma vez e armazenado na sessão
 if "sb" not in st.session_state:
     st.session_state.sb = get_supabase()
 sb = st.session_state.sb
@@ -243,18 +354,17 @@ def _signup(email, password):
 
 def _signout():
     sb.auth.sign_out()
-    # Limpa a sessão para garantir que o usuário precise fazer login novamente
     for key in list(st.session_state.keys()):
         del st.session_state[key]
-    st.session_state.auth_ok = False # Força a re-autenticação
+    st.session_state.auth_ok = False
+    st.rerun() # Adiciona rerun aqui para garantir que a página de login seja exibida
 
 def _user():
     sess = sb.auth.get_session()
     return sess.user if sess and sess.user else None
 
-# ========================= # Sidebar (logos 50% + Powered by) # =========================
+# ========================= # Sidebar # =========================
 with st.sidebar:
-    # Logo Family Finance no topo, centralizada
     st.image("assets/logo_family_finance.png", width=110)
     st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
 
@@ -262,7 +372,6 @@ with st.sidebar:
         st.session_state.auth_ok = False
 
     if not st.session_state.auth_ok:
-        # Conteúdo de Acesso (Login/Criar Conta)
         st.markdown('<div class="sidebar-title">Acesso à Plataforma</div>', unsafe_allow_html=True)
         email = st.text_input("Email").strip()
         pwd = st.text_input("Senha", type="password")
@@ -299,41 +408,21 @@ with st.sidebar:
                         st.error(f"Falha ao criar conta: {e}")
         st.stop() # Interrompe a execução se não estiver autenticado
 
-    # Se autenticado, exibe informações do usuário e menu de logout
+    # Se autenticado:
     user = _user()
     st.session_state.user = user # Armazena o objeto user na sessão
-    st.caption(f"Logado: {user.email if user else ''}")
+    # Usando uma div com classe para o email do usuário para facilitar o CSS
+    st.markdown(f'<div class="user-email-display">Logado: {user.email if user else ""}</div>', unsafe_allow_html=True)
     st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
 
-    # --- NOVO: Navegação Customizada após o Login ---
-    if st.session_state.auth_ok:
-        st.markdown('<div class="sidebar-title">Navegação</div>', unsafe_allow_html=True)
-        # Opções de navegação com ícones
-        navigation_options = {
-            "🏠 Home": "home",
-            "💸 Lançamentos": "lancamentos",
-            "📊 Relatórios": "relatorios",
-            "👥 Membros": "membros",
-            "⚙️ Configurações": "configuracoes"
-        }
-        # Define a página padrão se não houver seleção
-        if "current_page" not in st.session_state:
-            st.session_state.current_page = "home"
-
-        selected_page_label = st.radio(
-            "Ir para",
-            list(navigation_options.keys()),
-            index=list(navigation_options.keys()).index(next(key for key, value in navigation_options.items() if value == st.session_state.current_page)),
-            key="main_navigation_radio"
-        )
-        st.session_state.current_page = navigation_options[selected_page_label]
-        
-        st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
-        if st.button("Sair"):
-            _signout()
-            st.rerun()
-        st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
-    # --- FIM DA MODIFICAÇÃO DA NAVEGAÇÃO ---
+    # A navegação de páginas nativa do Streamlit será renderizada aqui
+    # e posicionada via CSS 'order' property. Não precisamos de st.radio.
+    
+    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True) # Divisor antes do botão Sair
+    # Botão Sair - Usamos um key para poder selecionar com CSS e aplicar o estilo
+    if st.button("Sair", key="sidebar_logout_button"):
+        _signout()
+    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True) # Divisor após o botão Sair
 
     # Logo AutomaGO no rodapé, centralizada
     st.markdown('<div class="small" style="text-align:center;opacity:.9;">Powered by</div>', unsafe_allow_html=True)
@@ -341,23 +430,20 @@ with st.sidebar:
 
 
 # ========================= # Bootstrap household/member # =========================
-# Esta parte só roda se o usuário estiver autenticado
+# Esta parte só roda se o usuário estiver autenticado e não tiver household_id
 if st.session_state.auth_ok and "HOUSEHOLD_ID" not in st.session_state:
     def bootstrap(user_id: str, supabase_client):
         try:
-            # Tenta aceitar convites pendentes, se a função existir e tiver lógica
             supabase_client.rpc("accept_pending_invite").execute()
         except Exception:
-            pass # Ignora se não houver convites pendentes ou função não existir ou falhar por outros motivos
+            pass
 
-        # Chama a RPC create_household_and_member que agora lida com a existência do membro internamente
         try:
             res = supabase_client.rpc("create_household_and_member", {"display_name": "Você"}).execute().data
         except Exception as e:
             st.error(f"Falha ao inicializar o household: {e}. Por favor, tente novamente ou contate o suporte.")
             st.stop()
 
-        # Verifica se a resposta da RPC é válida
         if not res or not res[0].get("household_id") or not res[0].get("member_id"):
             st.error("Resposta inválida do servidor ao inicializar o household. Por favor, tente novamente ou contate o suporte.")
             st.stop()
@@ -376,11 +462,10 @@ if not (st.session_state.auth_ok and "HOUSEHOLD_ID" in st.session_state):
     st.markdown('<p>Sua plataforma inteligente para gerenciar as finanças familiares de forma colaborativa, transparente e eficiente. Juntos, construa o futuro financeiro que você sempre sonhou.</p>', unsafe_allow_html=True)
     st.image("assets/logo_family_finance.png", width=250)
     st.markdown('<p>Acesse sua conta ou crie uma nova na barra lateral para começar a transformar suas finanças!</p>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True) # Fecha welcome-overlay
-    st.markdown('</div>', unsafe_allow_html=True) # Fecha welcome-container
-    st.stop() # Interrompe a execução para não carregar as páginas do app
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+    st.stop()
 
-# Dispara lembretes (não bloqueia fluxo) - Acesso aos dados da sessão
 notify_due_bills(sb, st.session_state.HOUSEHOLD_ID, st.session_state.user)
 
 
@@ -402,29 +487,23 @@ def get_dashboard_data(supabase_client, household_id):
     ]
     if expense_transactions_with_category:
         expense_categories_df = pd.DataFrame(expense_transactions_with_category)
-        # Garante que 'planned_amount' seja numérico, evitando possíveis erros
         expense_categories_df['planned_amount'] = pd.to_numeric(expense_categories_df['planned_amount'], errors='coerce').fillna(0)
         expense_categories = expense_categories_df.groupby("category")["planned_amount"].sum().reset_index()
         expense_categories.columns = ["Categoria", "Valor"]
     else:
-        # Retorna um DataFrame vazio com as colunas esperadas para evitar KeyError
         expense_categories = pd.DataFrame(columns=["Categoria", "Valor"])
-
 
     # --- Evolução Mensal (Últimos 6 meses) ---
     monthly_data = []
-    for i in range(6): # Últimos 6 meses (do atual para trás)
-        # Calcula o primeiro dia do mês 'i' meses atrás
+    for i in range(6): 
         month_date = today - relativedelta(months=i)
         month_start_calc = month_date.replace(day=1)
         
-        # Calcula o último dia do mês
         if month_date.month == 12:
             month_end_calc = date(month_date.year + 1, 1, 1) - timedelta(days=1)
         else:
             month_end_calc = date(month_date.year, month_date.month + 1, 1) - timedelta(days=1)
 
-        # Garante que month_end_calc não vá além de hoje para o mês atual
         if month_end_calc > today:
             month_end_calc = today
         
@@ -434,7 +513,7 @@ def get_dashboard_data(supabase_client, household_id):
         expense = sum(t.get("planned_amount", 0) for t in txs if t.get("type") == "expense")
         
         monthly_data.append({
-            "Mês": month_start_calc.strftime("%Y-%m"), # Formato YYYY-MM para garantir ordenação correta
+            "Mês": month_start_calc.strftime("%Y-%m"),
             "Receitas": income,
             "Despesas": expense,
             "Saldo": income - expense
@@ -447,18 +526,16 @@ def get_dashboard_data(supabase_client, household_id):
         "current_month_balance": current_balance,
         "expense_categories_df": expense_categories,
         "monthly_evolution_df": monthly_df,
-        "all_transactions_current_month": current_month_tx # Usado para a visão por membro
+        "all_transactions_current_month": current_month_tx
     }
 
 # ========================= # Função para renderizar o Dashboard (Home) # =========================
 def show_home_dashboard():
     st.markdown('<h1 class="dashboard-title">✨ Dashboard Financeiro Familiar</h1>', unsafe_allow_html=True)
 
-    # Centraliza o spinner para carregar os dados
     with st.spinner("Carregando dados do dashboard..."):
         dashboard_data = get_dashboard_data(sb, st.session_state.HOUSEHOLD_ID)
 
-    # --- Visão Geral do Mês ---
     st.markdown("<h2>Visão Geral do Mês Atual</h2>", unsafe_allow_html=True)
     col1, col2, col3 = st.columns(3)
 
@@ -490,9 +567,8 @@ def show_home_dashboard():
         </div>
         """, unsafe_allow_html=True)
 
-    st.markdown("---") # Separador visual
+    st.markdown("---")
 
-    # --- Análise de Despesas por Categoria e Evolução Mensal ---
     col_chart1, col_chart2 = st.columns(2)
 
     with col_chart1:
@@ -504,8 +580,8 @@ def show_home_dashboard():
                 values="Valor",
                 names="Categoria",
                 title="Distribuição das Despesas",
-                hole=0.4, # Donut chart
-                color_discrete_sequence=px.colors.qualitative.Pastel # Paleta de cores
+                hole=0.4,
+                color_discrete_sequence=px.colors.qualitative.Pastel
             )
             fig_pie.update_traces(textposition='inside', textinfo='percent+label', marker=dict(line=dict(color='#0b2038', width=1)))
             fig_pie.update_layout(showlegend=True, margin=dict(l=20, r=20, t=50, b=20))
@@ -536,9 +612,8 @@ def show_home_dashboard():
             st.info("Dados insuficientes para evolução mensal. Registre mais transações.")
         st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown("---") # Separador visual
+    st.markdown("---")
 
-    # --- Visão por Membro (Consolidado do Mês) ---
     st.markdown('<div class="chart-container">', unsafe_allow_html=True)
     st.markdown('<h2>Resultado por Membro (Mês Atual)</h2>', unsafe_allow_html=True)
 
@@ -557,8 +632,8 @@ def show_home_dashboard():
             x="Membro",
             y="valor_eff",
             title="Resultado Líquido por Membro",
-            color="valor_eff", # Colore as barras com base no valor
-            color_continuous_scale=px.colors.sequential.RdBu, # Escala de cores (vermelho-azul)
+            color="valor_eff",
+            color_continuous_scale=px.colors.sequential.RdBu,
             labels={"valor_eff": "Resultado (R\$)"}
         )
         fig_bar.update_layout(height=400, showlegend=False)
@@ -568,19 +643,9 @@ def show_home_dashboard():
         st.info("Sem lançamentos no mês para análise por membro.")
     st.markdown('</div>', unsafe_allow_html=True)
 
+
 # ========================= # Roteamento de Páginas (Após Login) # =========================
+# Se o usuário está autenticado e o household está configurado, exibe o dashboard.
+# Se outras páginas existirem na pasta 'pages/', o Streamlit as renderizará automaticamente.
 if st.session_state.auth_ok and "HOUSEHOLD_ID" in st.session_state:
-    if st.session_state.current_page == "home":
-        show_home_dashboard()
-    elif st.session_state.current_page == "lancamentos":
-        st.title("💸 Lançamentos")
-        st.info("Funcionalidade de Lançamentos em desenvolvimento. Em breve aqui!")
-    elif st.session_state.current_page == "relatorios":
-        st.title("📊 Relatórios")
-        st.info("Funcionalidade de Relatórios em desenvolvimento. Em breve aqui!")
-    elif st.session_state.current_page == "membros":
-        st.title("👥 Membros")
-        st.info("Gerenciamento de Membros em desenvolvimento. Em breve aqui!")
-    elif st.session_state.current_page == "configuracoes":
-        st.title("⚙️ Configurações")
-        st.info("Configurações do Household em desenvolvimento. Em breve aqui!")
+    show_home_dashboard() # app.py é a página Home/Dashboard
