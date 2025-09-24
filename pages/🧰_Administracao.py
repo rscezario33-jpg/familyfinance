@@ -2,7 +2,6 @@
 from __future__ import annotations
 from datetime import date
 import io
-import imghdr
 from typing import Optional, Tuple
 
 import streamlit as st
@@ -45,38 +44,45 @@ def toast_warn(msg: str): st.toast(msg, icon="⚠️")
 def toast_err(msg: str): st.toast(msg, icon="❌")
 
 def clear_and_refresh_soft():
-    """
-    Atualiza dados da UI limpando apenas o cache de dados.
-    Evita st.rerun() para não 'voltar' a primeira aba.
-    """
+    """Atualiza dados limpando apenas cache; evita st.rerun() para não voltar à primeira aba."""
     try:
         st.cache_data.clear()
     except Exception:
         pass
 
-def detect_image_mime(file_bytes: bytes) -> Tuple[str, str]:
+# ---- NOVO: detecção de imagem sem imghdr (compatível com Py 3.13)
+def sniff_image_mime(file_bytes: bytes, declared_mime: Optional[str] = None) -> Tuple[str, str]:
     """
-    Retorna (mime, ext) com base no conteúdo do arquivo.
-    Suporta png/jpg/jpeg/webp; fallback em png.
+    Retorna (mime, ext) baseado no header do arquivo e/ou MIME informado pelo navegador.
+    Suporta png/jpg/jpeg/webp; fallback para PNG.
     """
-    kind = imghdr.what(None, h=file_bytes)
-    if kind == "png":
+    # 1) se o navegador informou um MIME confiável, use
+    if declared_mime in ("image/png", "image/jpeg", "image/webp"):
+        if declared_mime == "image/png":
+            return "image/png", "png"
+        if declared_mime == "image/jpeg":
+            return "image/jpeg", "jpg"
+        if declared_mime == "image/webp":
+            return "image/webp", "webp"
+
+    # 2) inspeção do header
+    sig = file_bytes[:12]
+    # PNG: 89 50 4E 47 0D 0A 1A 0A
+    if sig.startswith(b"\x89PNG\r\n\x1a\n"):
         return "image/png", "png"
-    if kind in ("jpg", "jpeg"):
+    # JPEG: FF D8 FF
+    if sig.startswith(b"\xff\xd8\xff"):
         return "image/jpeg", "jpg"
-    # webp não é detectado por imghdr em alguns ambientes; checa assinatura
-    if file_bytes[:12].startswith(b"RIFF") and b"WEBP" in file_bytes[:12]:
+    # WEBP: RIFF....WEBP
+    if sig[:4] == b"RIFF" and sig[8:12] == b"WEBP":
         return "image/webp", "webp"
-    # fallback
+
+    # 3) fallback seguro
     return "image/png", "png"
 
 def ensure_avatars_bucket() -> None:
-    """
-    Garante existência do bucket 'avatars'.
-    Não falha se já existir.
-    """
+    """Garante existência do bucket 'avatars' (público); ignora erro de 'já existe'."""
     try:
-        # supabase-py v2: create_bucket lança erro se existir
         sb.storage.create_bucket("avatars", {"public": True})
     except Exception:
         pass  # já existe
@@ -143,7 +149,7 @@ with tabs[0]:
                         try:
                             ensure_avatars_bucket()
                             file_bytes = avatar_file.read()
-                            mime, ext = detect_image_mime(file_bytes)
+                            mime, ext = sniff_image_mime(file_bytes, getattr(avatar_file, "type", None))
                             path = f"{HOUSEHOLD_ID}/{user.id}.{ext}"
                             sb.storage.from_("avatars").upload(
                                 path=path,
@@ -180,7 +186,6 @@ with tabs[0]:
                             "email": invite_email.strip(),
                             "display_name": (invite_name or "").strip() or None,
                             "invited_by": user.id,
-                            # app_url vem do secret APP_URL, mas deixo explícito:
                             "app_url": "https://familyfinance.streamlit.app",
                         },
                     )
@@ -447,13 +452,13 @@ with tabs[4]:
 
     # tenta carregar vínculos; se as tabelas não existirem, apenas informa
     try:
-        has_acc_tbl = sb.table("account_members").select("id").limit(1).execute()
+        sb.table("account_members").select("id").limit(1).execute()
         has_acc_tbl = True
     except Exception:
         has_acc_tbl = False
 
     try:
-        has_card_tbl = sb.table("card_members").select("id").limit(1).execute()
+        sb.table("card_members").select("id").limit(1).execute()
         has_card_tbl = True
     except Exception:
         has_card_tbl = False
