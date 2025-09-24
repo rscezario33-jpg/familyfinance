@@ -39,37 +39,45 @@ def _safe_table(sb, HOUSEHOLD_ID, name: str):
     try:
         return sb.table(name).select("*").eq("household_id", HOUSEHOLD_ID).execute().data or []
     except Exception as e:
-        st.error(f"Erro ao buscar tabela '{name}': {e}")
+        # st.error(f"Erro ao buscar tabela '{name}' via _safe_table: {e}") # Descomente para debug se necessário
         return []
 
 # --- Fetchers de Dados ---
 # Todas as funções fetcher precisarão de 'sb' e 'HOUSEHOLD_ID'
 
+@st.cache_data(ttl=600) # Adicionei o cache para melhor performance
 def fetch_members(sb, HOUSEHOLD_ID):
     try:
-        return sb.table("members").select("id,display_name,role") \
+        # CORREÇÃO AQUI: Adicionei 'user_id' à seleção
+        return sb.table("members").select("id,display_name,role,user_id") \
             .eq("household_id", HOUSEHOLD_ID).order("display_name").execute().data
-    except Exception:
-        return _safe_table(sb, HOUSEHOLD_ID, "members")
+    except Exception as e:
+        st.error(f"Erro ao buscar membros: {e}") # Feedback mais claro se a consulta principal falhar
+        return _safe_table(sb, HOUSEHOLD_ID, "members") # Fallback para _safe_table
 
+@st.cache_data(ttl=600) # Adicionei o cache para melhor performance
 def fetch_categories(sb, HOUSEHOLD_ID):
     try:
         return sb.table("categories").select("id,name,kind") \
             .eq("household_id", HOUSEHOLD_ID).order("name").execute().data
-    except Exception:
+    except Exception as e:
+        st.error(f"Erro ao buscar categorias: {e}")
         return _safe_table(sb, HOUSEHOLD_ID, "categories")
 
+@st.cache_data(ttl=600) # Adicionei o cache para melhor performance
 def fetch_accounts(sb, HOUSEHOLD_ID, active_only=False):
-    q = sb.table("accounts").select("id,name,is_active,type").eq("household_id", HOUSEHOLD_ID)
+    q = sb.table("accounts").select("id,name,is_active,type,opening_balance").eq("household_id", HOUSEHOLD_ID) # Adicionei opening_balance
     if active_only:
         q = q.eq("is_active", True)
     try:
         data = q.execute().data or []
-    except Exception:
+    except Exception as e:
+        st.error(f"Erro ao buscar contas: {e}")
         data = _safe_table(sb, HOUSEHOLD_ID, "accounts")
     data.sort(key=lambda a:(a.get("name") or "").lower())
     return data
 
+@st.cache_data(ttl=600) # Adicionei o cache para melhor performance
 def fetch_cards(sb, HOUSEHOLD_ID, active_only=True):
     q = sb.table("credit_cards").select("id,household_id,name,limit_amount,closing_day,due_day,is_active,created_by") \
         .eq("household_id", HOUSEHOLD_ID)
@@ -77,21 +85,25 @@ def fetch_cards(sb, HOUSEHOLD_ID, active_only=True):
         q = q.eq("is_active", True)
     try:
         data = q.execute().data or []
-    except Exception:
+    except Exception as e:
+        st.error(f"Erro ao buscar cartões: {e}")
         data = _safe_table(sb, HOUSEHOLD_ID, "credit_cards")
     data.sort(key=lambda c:(c.get("name") or "").lower())
     return data
 
+@st.cache_data(ttl=600) # Adicionei o cache para melhor performance
 def fetch_card_limits(sb, HOUSEHOLD_ID):
     try:
         data = sb.table("v_card_limit").select("*").eq("household_id", HOUSEHOLD_ID).execute().data or []
-    except Exception:
+    except Exception as e:
+        st.error(f"Erro ao buscar limites de cartão: {e}")
         data = [] # Não há _safe_table para views
     data.sort(key=lambda c:(c.get("name") or "").lower())
     return data
 
+@st.cache_data(ttl=600) # Adicionei o cache para melhor performance
 def fetch_tx(sb, HOUSEHOLD_ID, start: date, end: date):
-    rows = _safe_table(sb, HOUSEHOLD_ID, "transactions")
+    rows = _safe_table(sb, HOUSEHOLD_ID, "transactions") #_safe_table já possui cache implícito
     out=[]
     for t in rows:
         d = _to_date_safe(t.get("occurred_at"))
@@ -100,8 +112,9 @@ def fetch_tx(sb, HOUSEHOLD_ID, start: date, end: date):
     out.sort(key=lambda t: (_to_date_safe(t.get("due_date")) or _to_date_safe(t.get("occurred_at")) or date.min))
     return out
 
+@st.cache_data(ttl=600) # Adicionei o cache para melhor performance
 def fetch_tx_due(sb, HOUSEHOLD_ID, start: date, end: date):
-    rows = _safe_table(sb, HOUSEHOLD_ID, "transactions")
+    rows = _safe_table(sb, HOUSEHOLD_ID, "transactions") #_safe_table já possui cache implícito
     out=[]
     for t in rows:
         dd = _to_date_safe(t.get("due_date"))
@@ -109,7 +122,7 @@ def fetch_tx_due(sb, HOUSEHOLD_ID, start: date, end: date):
         key = dd or od
         if key and start <= key <= end:
             out.append(t)
-    out.sort(key=lambda t: (_to_date_safe(t.get("due_date")) or _to_date_safe(t.get("occurred_at")) or date.min))
+    out.sort(key=lambda t: (_to_to_date_safe(t.get("due_date")) or _to_date_safe(t.get("occurred_at")) or date.min))
     return out
 
 # --- SMTP (opcional) ---
