@@ -56,23 +56,6 @@ def _exists_table(name: str) -> bool:
     except Exception:
         return False
 
-def _ensure_avatars_bucket():
-    """Tenta criar o bucket 'avatars' se não existir."""
-    try:
-        # se listar falhar, tenta criar
-        sb.storage.from_("avatars").list("")
-        return True
-    except Exception:
-        try:
-            # cria bucket público
-            sb.storage.create_bucket("avatars", {
-                "public": True,
-                "fileSizeLimit": "5242880",  # 5MB
-            })
-            return True
-        except Exception:
-            return False
-
 def _signed_or_public_url(bucket: str, path: str, expires: int = 3600) -> str | None:
     try:
         url = sb.storage.from_(bucket).create_signed_url(path, expires)
@@ -108,7 +91,6 @@ def render_members_tab():
             new_name = st.text_input("Seu nome de exibição", value=current_name, key="adm_member_display_name")
             if st.button("Salvar meu nome", use_container_width=True):
                 try:
-                    # não promove papel automaticamente
                     role = me.get("role") if me else "member"
                     sb.table("members").upsert({
                         "household_id": HOUSEHOLD_ID,
@@ -130,9 +112,11 @@ def render_members_tab():
                     st.image(url, width=128, caption="Atual")
             file = st.file_uploader("Enviar nova foto (PNG/JPG)", type=["png", "jpg", "jpeg"], key="upload_avatar")
             if file and my_member_id:
-                ok_bucket = _ensure_avatars_bucket()
-                if not ok_bucket:
-                    st.error("Bucket de avatars não existe e não pôde ser criado. Crie o bucket 'avatars' no Supabase.")
+                try:
+                    # tenta listar para verificar existência do bucket
+                    sb.storage.from_("avatars").list("")
+                except Exception:
+                    st.error("Bucket 'avatars' não existe no Storage. Crie-o como público em Supabase → Storage.")
                 else:
                     try:
                         content = file.read()
@@ -159,6 +143,7 @@ def render_members_tab():
                     st.warning("Informe um e-mail válido.")
                 else:
                     # 1) Tenta Edge Function 'send-invite'
+                    ef_error = None
                     try:
                         ef_resp = sb.functions.invoke(
                             "send-invite",
@@ -177,8 +162,9 @@ def render_members_tab():
                             else:
                                 _toast("Convite registrado (sem e-mail). Repasse o link manualmente.", icon="ℹ️")
                             return
-                    except Exception:
-                        pass  # cai para fallback
+                        ef_error = data
+                    except Exception as e:
+                        ef_error = str(e)
 
                     # 2) Fallback: RPC invite_member (registra convite no banco)
                     called = _safe_rpc("invite_member", {
@@ -188,6 +174,8 @@ def render_members_tab():
                     })
                     if called is not None:
                         _toast("Convite registrado! O convidado poderá aceitar ao criar/login.")
+                        if ef_error:
+                            st.caption(f"Detalhe da Edge Function (debug): {ef_error}")
                         return
 
                     # 3) Último fallback: util send_email() (SMTP local/Resend/etc)
@@ -208,6 +196,8 @@ def render_members_tab():
                             "Não foi possível enviar e-mail neste ambiente. "
                             "Configure a Edge Function, SMTP em `send_email` ou use a tabela `pending_invites`."
                         )
+                    if ef_error:
+                        st.caption(f"Detalhe da Edge Function (debug): {ef_error}")
 
     st.markdown("---")
 
@@ -230,7 +220,6 @@ def render_members_tab():
         gb = GridOptionsBuilder.from_dataframe(df)
         gb.configure_selection("single")
         gb.configure_column("id", hide=True)
-        # owners podem editar Nome e Papel
         gb.configure_column("Nome", editable=OWNER)
         gb.configure_column("Papel", editable=OWNER, cellEditor="agSelectCellEditor", cellEditorParams={"values": ["member", "owner"]})
         grid_options = gb.build()
@@ -250,7 +239,6 @@ def render_members_tab():
             if st.button("Salvar alterações (Nome/Papel)", use_container_width=True, disabled=not OWNER):
                 try:
                     new_df = grid.data
-                    # aplica diffs: atualiza os registros que mudaram
                     new_map = {row["id"]: row for _, row in new_df.iterrows()}
                     for m in mems:
                         row = new_map.get(m["id"])
@@ -279,7 +267,6 @@ def render_members_tab():
                     st.error(f"Erro ao excluir: {e}")
 
     except Exception:
-        # fallback simples
         st.info("Para edição/exclusão com AG-Grid, instale `streamlit-aggrid` no requirements.")
         df = pd.DataFrame([{
             "Nome": m.get("display_name"),
@@ -423,7 +410,6 @@ def render_cards_tab():
         col_nm, col_lim, col_closing, col_due = st.columns(4)
         with col_nm: nm = st.text_input("Nome do Cartão")
         with col_lim: lim = st.number_input("Limite (R$)", min_value=0.0, step=100.0, value=0.0)
-        # AGORA: 1–31
         with col_closing: closing = st.number_input("Dia de Fechamento (1-31)", min_value=1, max_value=31, value=5)
         with col_due:     due = st.number_input("Dia de Vencimento (1-31)", min_value=1, max_value=31, value=15)
         can_save = st.form_submit_button("Salvar Cartão")
