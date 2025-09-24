@@ -1,4 +1,4 @@
-# app.py — Family Finance (Login fullscreen, sempre mostra formulário)
+# app.py — Family Finance (Login fullscreen, sempre mostra formulário) — FIX st.rerun()
 from __future__ import annotations
 import streamlit as st
 from ff_shared import inject_css, sb, user, bootstrap
@@ -57,7 +57,7 @@ if u:
         if st.button("Sair"):
             sb.auth.sign_out()
             st.session_state.clear()
-            st.experimental_rerun()
+            st.rerun()  # <— antes era st.experimental_rerun()
 
 # ===== Layout do cartão =====
 st.markdown('<div class="login-bg"><div class="login-card">', unsafe_allow_html=True)
@@ -86,7 +86,7 @@ def go_home(uid: str):
         st.switch_page("pages/1_Entrada.py")
     except Exception:
         st.success("Login ok! Abra o menu de páginas (☰) e vá para ‘Entrada’.")
-        st.experimental_rerun()
+        st.rerun()  # <— antes era st.experimental_rerun()
 
 if signin:
     try:
