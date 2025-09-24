@@ -1,30 +1,18 @@
 # pages/🧰_Administracao.py
 from __future__ import annotations
 from datetime import date
-import io
-from typing import Optional, Tuple
-
 import streamlit as st
+import pandas as pd
 
-# tenta usar AG-Grid; se não existir, cai no fallback
-try:
-    from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
-    HAS_AGGRID = True
-except Exception:
-    HAS_AGGRID = False
-
-# utils do seu projeto
+# Utils/projeto
 from utils import (
     to_brl,
-    fetch_members,
-    fetch_accounts,
-    fetch_categories,
-    fetch_cards,
-    fetch_card_limits,
+    fetch_members, fetch_accounts, fetch_categories, fetch_cards, fetch_card_limits,
+    send_email,  # fallback de e-mail
 )
 
 # =========================
-# Gate de autenticação
+# 0) Gate de autenticação
 # =========================
 if "sb" not in st.session_state or "HOUSEHOLD_ID" not in st.session_state or "user" not in st.session_state:
     st.warning("🔒 Por favor, faça login na página principal para acessar a administração.")
@@ -32,483 +20,639 @@ if "sb" not in st.session_state or "HOUSEHOLD_ID" not in st.session_state or "us
 
 sb = st.session_state.sb
 HOUSEHOLD_ID = st.session_state.HOUSEHOLD_ID
-user = st.session_state.user
+USER = st.session_state.user
 
 st.title("🧰 Administração do Sistema Financeiro")
 
 # =========================
-# Helpers de UI / persistência
+# Helpers
 # =========================
-def toast_ok(msg: str): st.toast(msg, icon="✅")
-def toast_warn(msg: str): st.toast(msg, icon="⚠️")
-def toast_err(msg: str): st.toast(msg, icon="❌")
-
-def clear_and_refresh_soft():
-    """Atualiza dados limpando apenas cache; evita st.rerun() para não voltar à primeira aba."""
+def _toast(msg: str, icon: str = "✅"):
     try:
-        st.cache_data.clear()
+        st.toast(msg, icon=icon)
     except Exception:
-        pass
+        st.success(msg)
 
-# ---- NOVO: detecção de imagem sem imghdr (compatível com Py 3.13)
-def sniff_image_mime(file_bytes: bytes, declared_mime: Optional[str] = None) -> Tuple[str, str]:
-    """
-    Retorna (mime, ext) baseado no header do arquivo e/ou MIME informado pelo navegador.
-    Suporta png/jpg/jpeg/webp; fallback para PNG.
-    """
-    # 1) se o navegador informou um MIME confiável, use
-    if declared_mime in ("image/png", "image/jpeg", "image/webp"):
-        if declared_mime == "image/png":
-            return "image/png", "png"
-        if declared_mime == "image/jpeg":
-            return "image/jpeg", "jpg"
-        if declared_mime == "image/webp":
-            return "image/webp", "webp"
-
-    # 2) inspeção do header
-    sig = file_bytes[:12]
-    # PNG: 89 50 4E 47 0D 0A 1A 0A
-    if sig.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png", "png"
-    # JPEG: FF D8 FF
-    if sig.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg", "jpg"
-    # WEBP: RIFF....WEBP
-    if sig[:4] == b"RIFF" and sig[8:12] == b"WEBP":
-        return "image/webp", "webp"
-
-    # 3) fallback seguro
-    return "image/png", "png"
-
-def ensure_avatars_bucket() -> None:
-    """Garante existência do bucket 'avatars' (público); ignora erro de 'já existe'."""
+def _is_owner() -> bool:
     try:
-        sb.storage.create_bucket("avatars", {"public": True})
-    except Exception:
-        pass  # já existe
-
-# =========================
-# Abas
-# =========================
-tabs = st.tabs(["👥 Membros", "💰 Contas", "🏷️ Categorias", "💳 Cartões", "🔗 Vínculos"])
-
-# -------------------------
-# 👥 Membros
-# -------------------------
-with tabs[0]:
-    st.subheader("Gestão de Membros")
-
-    # 1) Definir/alterar nome de exibição do usuário atual
-    with st.form("form_member_name", clear_on_submit=False):
         mems = fetch_members(sb, HOUSEHOLD_ID) or []
-        current_name = "Você"
-        my_member = None
-        for m in mems:
-            if m.get("user_id") == getattr(user, "id", None):
-                current_name = m.get("display_name") or current_name
-                my_member = m
-                break
+        me = next((m for m in mems if m.get("user_id") == USER.id), None)
+        return bool(me and me.get("role") == "owner")
+    except Exception:
+        return False
 
-        new_display = st.text_input("Seu nome de exibição", value=current_name)
-        col_a, col_b = st.columns([1, 1])
+OWNER = _is_owner()
 
-        # 2) Upload de foto do membro (avatar)
-        with col_a:
-            avatar_file = st.file_uploader(
-                "Foto (png/jpg/webp)",
-                type=["png", "jpg", "jpeg", "webp"],
-                accept_multiple_files=False,
-                help="Imagem do seu perfil para usar nos dashboards.",
-                key="member_avatar_uploader",
-            )
-        with col_b:
-            st.write("")  # espaçamento
+def _safe_rpc(name: str, params: dict | None = None):
+    try:
+        return sb.rpc(name, params or {}).execute()
+    except Exception:
+        return None
 
-        submitted = st.form_submit_button("Salvar")
+def _exists_table(name: str) -> bool:
+    try:
+        sb.table(name).select("id").eq("household_id", HOUSEHOLD_ID).limit(1).execute()
+        return True
+    except Exception:
+        return False
 
-        if submitted:
-            if not new_display.strip():
-                st.error("Informe um nome válido.")
-            else:
-                # upsert do membro
+def _ensure_avatars_bucket():
+    """Tenta criar o bucket 'avatars' se não existir."""
+    try:
+        # se listar falhar, tenta criar
+        sb.storage.from_("avatars").list("")
+        return True
+    except Exception:
+        try:
+            # cria bucket público
+            sb.storage.create_bucket("avatars", {
+                "public": True,
+                "fileSizeLimit": "5242880",  # 5MB
+            })
+            return True
+        except Exception:
+            return False
+
+def _signed_or_public_url(bucket: str, path: str, expires: int = 3600) -> str | None:
+    try:
+        url = sb.storage.from_(bucket).create_signed_url(path, expires)
+        if isinstance(url, dict):
+            return url.get("signedURL") or url.get("signed_url")
+        return url
+    except Exception:
+        try:
+            pub = sb.storage.from_(bucket).get_public_url(path)
+            if isinstance(pub, dict):
+                return pub.get("publicURL") or pub.get("public_url")
+            return pub
+        except Exception:
+            return None
+
+def _unique_name_guard(existing_names: list[str], name: str) -> bool:
+    return name.strip().lower() not in {n.strip().lower() for n in existing_names}
+
+# =========================
+# 1) Aba: Membros
+# =========================
+def render_members_tab():
+    st.subheader("👥 Membros da Família")
+
+    # --- 1.1 Meu perfil (nome + foto)
+    with st.expander("Meu perfil", expanded=True):
+        mems = fetch_members(sb, HOUSEHOLD_ID) or []
+        me = next((m for m in mems if m.get("user_id") == USER.id), None)
+        current_name = me.get("display_name") if me else "Você"
+
+        colA, colB = st.columns([2, 1])
+        with colA:
+            new_name = st.text_input("Seu nome de exibição", value=current_name, key="adm_member_display_name")
+            if st.button("Salvar meu nome", use_container_width=True):
                 try:
-                    sb.table("members").upsert(
-                        {
-                            "household_id": HOUSEHOLD_ID,
-                            "user_id": user.id,
-                            "display_name": new_display.strip(),
-                            "role": my_member["role"] if my_member else "owner",
-                        },
-                        on_conflict="household_id,user_id",
-                    ).execute()
+                    # não promove papel automaticamente
+                    role = me.get("role") if me else "member"
+                    sb.table("members").upsert({
+                        "household_id": HOUSEHOLD_ID,
+                        "user_id": USER.id,
+                        "display_name": new_name.strip() or "Você",
+                        "role": role
+                    }, on_conflict="household_id,user_id").execute()
+                    _toast("Nome salvo!")
                 except Exception as e:
                     st.error(f"Erro ao salvar nome: {e}")
+
+        with colB:
+            st.write("**Foto do perfil**")
+            my_member_id = me.get("id") if me else None
+            if my_member_id:
+                avatar_path = f"{HOUSEHOLD_ID}/{my_member_id}.png"
+                url = _signed_or_public_url("avatars", avatar_path, 3600)
+                if url:
+                    st.image(url, width=128, caption="Atual")
+            file = st.file_uploader("Enviar nova foto (PNG/JPG)", type=["png", "jpg", "jpeg"], key="upload_avatar")
+            if file and my_member_id:
+                ok_bucket = _ensure_avatars_bucket()
+                if not ok_bucket:
+                    st.error("Bucket de avatars não existe e não pôde ser criado. Crie o bucket 'avatars' no Supabase.")
                 else:
-                    # upload do avatar se houver
-                    if avatar_file is not None:
-                        try:
-                            ensure_avatars_bucket()
-                            file_bytes = avatar_file.read()
-                            mime, ext = sniff_image_mime(file_bytes, getattr(avatar_file, "type", None))
-                            path = f"{HOUSEHOLD_ID}/{user.id}.{ext}"
-                            sb.storage.from_("avatars").upload(
-                                path=path,
-                                file=io.BytesIO(file_bytes),
-                                file_options={"content-type": mime, "upsert": True},
-                            )
-                            toast_ok("Foto enviada com sucesso.")
-                        except Exception as e:
-                            st.error(f"Falha ao salvar foto: {e}")
-
-                    toast_ok("Membro atualizado.")
-                    clear_and_refresh_soft()
+                    try:
+                        content = file.read()
+                        avatar_path = f"{HOUSEHOLD_ID}/{my_member_id}.png"
+                        sb.storage.from_("avatars").upload(
+                            avatar_path, content,
+                            {"content-type": "image/png", "upsert": "true"}
+                        )
+                        _toast("Foto atualizada!")
+                    except Exception as e:
+                        st.error(f"Falha ao salvar foto: {e}")
 
     st.markdown("---")
 
-    # 3) Convidar novo membro (via Edge Function SendGrid)
-    st.markdown("#### Convidar pessoa para o agregado")
-    with st.form("form_invite_member", clear_on_submit=True):
-        invite_email = st.text_input("E-mail do convidado")
-        invite_name = st.text_input("Nome do convidado (opcional)")
-        col_i1, col_i2 = st.columns([1, 2])
-        with col_i1:
-            send_btn = st.form_submit_button("Enviar convite ✉️")
+    # --- 1.2 Convites (owner) — Edge Function primeiro, depois RPC e por último send_email
+    with st.expander("Convidar novo membro (somente owner)", expanded=False):
+        if not OWNER:
+            st.info("Apenas o **owner** pode enviar convites.")
+        else:
+            invite_email = st.text_input("E-mail do convidado", key="invite_email").strip()
+            invite_name = st.text_input("Nome a exibir (opcional)", key="invite_name").strip()
+            if st.button("Enviar convite", use_container_width=True, key="btn_send_invite"):
+                if not invite_email:
+                    st.warning("Informe um e-mail válido.")
+                else:
+                    # 1) Tenta Edge Function 'send-invite'
+                    try:
+                        ef_resp = sb.functions.invoke(
+                            "send-invite",
+                            body={
+                                "household_id": HOUSEHOLD_ID,
+                                "email": invite_email,
+                                "display_name": invite_name or None,
+                                "invited_by": USER.id,
+                                "app_url": "https://familyfinance.streamlit.app",
+                            },
+                        )
+                        data = getattr(ef_resp, "data", {}) or {}
+                        if data.get("ok"):
+                            if data.get("email_sent"):
+                                _toast("Convite enviado por e-mail!")
+                            else:
+                                _toast("Convite registrado (sem e-mail). Repasse o link manualmente.", icon="ℹ️")
+                            return
+                    except Exception:
+                        pass  # cai para fallback
 
-        if send_btn:
-            if not invite_email or "@" not in invite_email:
-                st.error("Informe um e-mail válido.")
-            else:
-                try:
-                    resp = sb.functions.invoke(
-                        "send-invite",
-                        body={
-                            "household_id": HOUSEHOLD_ID,
-                            "email": invite_email.strip(),
-                            "display_name": (invite_name or "").strip() or None,
-                            "invited_by": user.id,
-                            "app_url": "https://familyfinance.streamlit.app",
-                        },
+                    # 2) Fallback: RPC invite_member (registra convite no banco)
+                    called = _safe_rpc("invite_member", {
+                        "p_household_id": HOUSEHOLD_ID,
+                        "p_email": invite_email,
+                        "p_display_name": invite_name or None
+                    })
+                    if called is not None:
+                        _toast("Convite registrado! O convidado poderá aceitar ao criar/login.")
+                        return
+
+                    # 3) Último fallback: util send_email() (SMTP local/Resend/etc)
+                    ok = send_email(
+                        [invite_email],
+                        subject="Convite - Family Finance",
+                        body=(
+                            "Olá!\n\n"
+                            "Você foi convidado para participar do Family Finance.\n"
+                            "Crie sua conta na página inicial e, após login, aceite o convite pendente.\n\n"
+                            "Abraços!"
+                        )
                     )
-                    data = getattr(resp, "data", {}) or {}
-                    if data.get("ok") and data.get("email_sent"):
-                        toast_ok("Convite enviado! Peça para o convidado verificar a caixa de entrada/spam.")
+                    if ok:
+                        _toast("Convite enviado por e-mail!")
                     else:
-                        st.error(f"Falha ao enviar convite: {data or resp}")
-                except Exception as e:
-                    st.error(f"Erro ao chamar função de convite: {e}")
+                        st.warning(
+                            "Não foi possível enviar e-mail neste ambiente. "
+                            "Configure a Edge Function, SMTP em `send_email` ou use a tabela `pending_invites`."
+                        )
 
     st.markdown("---")
-    st.markdown("#### Membros cadastrados")
 
+    # --- 1.3 Lista de membros com AG-Grid (editar/excluir)
+    st.markdown("#### Membros cadastrados")
     mems = fetch_members(sb, HOUSEHOLD_ID) or []
     if not mems:
-        st.info("Nenhum membro cadastrado ainda.")
-    else:
-        if HAS_AGGRID:
-            import pandas as pd
-            df = pd.DataFrame(mems)[["display_name", "role", "user_id", "id"]]
-            df.rename(
-                columns={
-                    "display_name": "Nome",
-                    "role": "Papel",
-                    "user_id": "Usuário (auth)",
-                    "id": "ID membro",
-                },
-                inplace=True,
-            )
-            gb = GridOptionsBuilder.from_dataframe(df)
-            gb.configure_selection("single", use_checkbox=True)
-            gb.configure_grid_options(domLayout="autoHeight")
-            gb.configure_default_column(editable=True)
-            grid = AgGrid(
-                df,
-                gridOptions=gb.build(),
-                update_mode=GridUpdateMode.SELECTION_CHANGED | GridUpdateMode.VALUE_CHANGED,
-                height=350,
-                fit_columns_on_grid_load=True,
-                theme="alpine",
-            )
+        st.info("Nenhum membro ainda.")
+        return
 
-            col_left, col_right = st.columns([1, 3])
-            with col_left:
-                if st.button("Salvar edição"):
-                    try:
-                        sel = grid["selected_rows"]
-                        if sel:
-                            row = sel[0]
-                            sb.table("members").update(
-                                {"display_name": row["Nome"], "role": row["Papel"]}
-                            ).eq("id", row["ID membro"]).execute()
-                            toast_ok("Membro atualizado.")
-                            clear_and_refresh_soft()
-                        else:
-                            toast_warn("Selecione uma linha para editar.")
-                    except Exception as e:
-                        st.error(f"Erro ao salvar: {e}")
-                if st.button("Excluir selecionado"):
-                    try:
-                        sel = grid["selected_rows"]
-                        if sel:
-                            row = sel[0]
-                            sb.table("members").delete().eq("id", row["ID membro"]).execute()
-                            toast_ok("Membro excluído.")
-                            clear_and_refresh_soft()
-                        else:
-                            toast_warn("Selecione uma linha para excluir.")
-                    except Exception as e:
-                        st.error(f"Erro ao excluir: {e}")
-        else:
-            # Fallback simples
-            for m in mems:
-                st.write(f"• **{m['display_name']}** — {m['role']}")
+    try:
+        from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
+        df = pd.DataFrame([{
+            "id": m.get("id"),
+            "Nome": m.get("display_name"),
+            "Papel": m.get("role"),
+            "User ID": m.get("user_id"),
+        } for m in mems])
 
-# -------------------------
-# 💰 Contas
-# -------------------------
-with tabs[1]:
-    st.subheader("Gestão de Contas")
+        gb = GridOptionsBuilder.from_dataframe(df)
+        gb.configure_selection("single")
+        gb.configure_column("id", hide=True)
+        # owners podem editar Nome e Papel
+        gb.configure_column("Nome", editable=OWNER)
+        gb.configure_column("Papel", editable=OWNER, cellEditor="agSelectCellEditor", cellEditorParams={"values": ["member", "owner"]})
+        grid_options = gb.build()
+
+        grid = AgGrid(
+            df,
+            gridOptions=grid_options,
+            update_mode=GridUpdateMode.VALUE_CHANGED | GridUpdateMode.SELECTION_CHANGED,
+            allow_unsafe_jscode=True,
+            height=320,
+            fit_columns_on_grid_load=True,
+            theme="balham"
+        )
+
+        colU, colD = st.columns(2)
+        with colU:
+            if st.button("Salvar alterações (Nome/Papel)", use_container_width=True, disabled=not OWNER):
+                try:
+                    new_df = grid.data
+                    # aplica diffs: atualiza os registros que mudaram
+                    new_map = {row["id"]: row for _, row in new_df.iterrows()}
+                    for m in mems:
+                        row = new_map.get(m["id"])
+                        if not row:
+                            continue
+                        new_name = row["Nome"]
+                        new_role = row["Papel"]
+                        if new_name != m["display_name"] or new_role != m["role"]:
+                            sb.table("members").update({
+                                "display_name": str(new_name),
+                                "role": str(new_role)
+                            }).eq("id", m["id"]).execute()
+                    _toast("Alterações salvas!")
+                except Exception as e:
+                    st.error(f"Erro ao salvar alterações: {e}")
+
+        with colD:
+            sel = grid["selected_rows"]
+            disabled = not (OWNER and sel)
+            if st.button("Excluir selecionado", use_container_width=True, disabled=disabled):
+                try:
+                    target = sel[0]["id"]
+                    sb.table("members").delete().eq("id", target).execute()
+                    _toast("Membro excluído!")
+                except Exception as e:
+                    st.error(f"Erro ao excluir: {e}")
+
+    except Exception:
+        # fallback simples
+        st.info("Para edição/exclusão com AG-Grid, instale `streamlit-aggrid` no requirements.")
+        df = pd.DataFrame([{
+            "Nome": m.get("display_name"),
+            "Papel": "Owner" if m.get("role") == "owner" else "Membro",
+            "User ID": m.get("user_id"),
+        } for m in mems])
+        st.dataframe(df, use_container_width=True)
+
+# =========================
+# 2) Aba: Contas
+# =========================
+def render_accounts_tab():
+    st.subheader("💰 Contas")
+    st.caption("Cadastre contas (corrente/poupança/carteira). *Cartões ficam na aba Cartões.*")
 
     with st.form("form_new_account", clear_on_submit=True):
-        an = st.text_input("Nome da conta")
-        at = st.selectbox(
-            "Tipo de conta",
-            ["checking", "savings", "wallet", "credit"],
-            format_func=lambda x: x.capitalize(),
-        )
-        ob = st.number_input("Saldo inicial (R$)", min_value=0.0, step=50.0, value=0.0)
-        ok = st.form_submit_button("Salvar conta")
-        if ok:
-            if not an.strip():
-                st.error("Informe um nome para a conta.")
+        an = st.text_input("Nome da Conta")
+        at = st.selectbox("Tipo de Conta", ["checking", "savings", "wallet"], format_func=str.capitalize)
+        ob = st.number_input("Saldo Inicial (R$)", min_value=0.0, step=50.0, value=0.0)
+        can_save = st.form_submit_button("Salvar Nova Conta")
+
+        if can_save:
+            if not OWNER:
+                st.error("Apenas o **owner** pode criar contas.")
+            elif not an.strip():
+                st.error("Informe um nome válido.")
             else:
-                try:
-                    sb.table("accounts").insert(
-                        {
+                accs = fetch_accounts(sb, HOUSEHOLD_ID, active_only=False) or []
+                if not _unique_name_guard([a["name"] for a in accs], an):
+                    st.error("Já existe uma conta com este nome.")
+                else:
+                    try:
+                        sb.table("accounts").insert({
                             "household_id": HOUSEHOLD_ID,
                             "name": an.strip(),
                             "type": at,
                             "opening_balance": ob,
                             "currency": "BRL",
-                            "is_active": True,
-                        }
-                    ).execute()
-                    toast_ok("Conta salva.")
-                    clear_and_refresh_soft()
-                except Exception as e:
-                    st.error(f"Erro ao salvar conta: {e}")
+                            "is_active": True
+                        }).execute()
+                        _toast("Conta criada!")
+                    except Exception as e:
+                        st.error(f"Erro ao salvar: {e}")
 
-    st.markdown("#### Suas contas")
-    accs = fetch_accounts(sb, HOUSEHOLD_ID, include_inactive=True) or []
+    st.markdown("---")
+    st.markdown("#### Suas Contas")
+    accs = fetch_accounts(sb, HOUSEHOLD_ID, active_only=False) or []
     if not accs:
         st.info("Nenhuma conta cadastrada.")
-    else:
-        for a in accs:
-            col1, col2, col3, col4, col5 = st.columns([3, 2, 2, 2, 1])
-            with col1:
-                st.markdown(f"{'🟢' if a['is_active'] else '🔴'} **{a['name']}**")
-            with col2:
-                st.write(f"Tipo: {a.get('type','').capitalize()}")
-            with col3:
-                st.write(f"Saldo inicial: {to_brl(a['opening_balance'])}")
-            with col4:
-                st.info("Ativa" if a["is_active"] else "Inativa")
-            with col5:
-                if st.button("Desativar" if a["is_active"] else "Ativar", key=f"acc_tgl_{a['id']}"):
+        return
+
+    for a in accs:
+        col1, col2, col3, col4, col5 = st.columns([3,2,2,2,2])
+        with col1: st.markdown(f"**{a['name']}**")
+        with col2: st.write(f"Tipo: {a.get('type','').capitalize()}")
+        with col3: st.write(f"Saldo inicial: {to_brl(a.get('opening_balance',0))}")
+        with col4: st.info("Ativa" if a.get("is_active") else "Inativa")
+        with col5:
+            lbl = "Desativar" if a.get("is_active") else "Ativar"
+            if st.button(lbl, key=f"acc_toggle_{a['id']}"):
+                if not OWNER:
+                    st.error("Apenas owner pode alterar status.")
+                else:
                     try:
                         sb.table("accounts").update({"is_active": not a["is_active"]}).eq("id", a["id"]).execute()
-                        toast_ok("Status atualizado.")
-                        clear_and_refresh_soft()
+                        _toast("Status atualizado!")
                     except Exception as e:
-                        st.error(f"Erro ao atualizar: {e}")
+                        st.error(f"Erro: {e}")
 
-# -------------------------
-# 🏷️ Categorias
-# -------------------------
-with tabs[2]:
-    st.subheader("Gestão de Categorias")
-    st.caption("Dica: escolha um ícone/emoji para facilitar a leitura nos dashboards (ex.: 💡, 🛒, 🚗).")
+# =========================
+# 3) Aba: Categorias (com ícone)
+# =========================
+def render_categories_tab():
+    st.subheader("🏷️ Categorias")
+    st.caption("Organize suas transações. Dica: escolha um ícone para facilitar os gráficos.")
 
+    ICONES = ["💸","🛒","🍔","🍽️","🏠","🚗","🎓","🎮","🧾","📦","🧺","💊","🐶","🎁","✈️","📱","🛠️","🎬","🧒","👗","💼","🧘","⚽","🔥","🌐","💡","🍻","🧃","📚","💳","🪙","🏦","🧴","🪜"]
     with st.form("form_new_category", clear_on_submit=True):
-        c1, c2, c3 = st.columns([2, 1, 1])
-        with c1:
-            cn = st.text_input("Nome da categoria (sem emoji)")
-        with c2:
-            ck = st.selectbox("Tipo", ["income", "expense"], format_func=lambda k: {"income": "Receita", "expense": "Despesa"}[k])
-        with c3:
-            emoji = st.text_input("Ícone/emoji", value="🏷️", max_chars=3, help="Cole um emoji aqui (ex.: 🛒)")
-        ok = st.form_submit_button("Salvar categoria")
-        if ok:
-            base = cn.strip()
-            if not base:
+        col1, col2, col3 = st.columns([2,1,1])
+        with col1:
+            cn = st.text_input("Nome da Categoria")
+        with col2:
+            ck = st.selectbox("Tipo", ["income", "expense"], format_func=lambda k: {"income":"Receita","expense":"Despesa"}[k])
+        with col3:
+            icon = st.selectbox("Ícone", ICONES, index=0)
+        can_save = st.form_submit_button("Salvar Categoria")
+
+        if can_save:
+            if not OWNER:
+                st.error("Apenas owner pode criar categorias.")
+            elif not cn.strip():
                 st.error("Informe um nome.")
             else:
-                try:
-                    name_final = f"{emoji.strip()} {base}" if emoji.strip() else base
-                    sb.table("categories").insert(
-                        {"household_id": HOUSEHOLD_ID, "name": name_final, "kind": ck}
-                    ).execute()
-                    toast_ok("Categoria salva.")
-                    clear_and_refresh_soft()
-                except Exception as e:
-                    st.error(f"Erro ao salvar categoria: {e}")
+                full_name = f"{icon} {cn.strip()}"
+                cats = fetch_categories(sb, HOUSEHOLD_ID) or []
+                if not _unique_name_guard([c["name"] for c in cats], full_name):
+                    st.error("Já existe uma categoria com este nome/ícone.")
+                else:
+                    try:
+                        sb.table("categories").insert({
+                            "household_id": HOUSEHOLD_ID,
+                            "name": full_name,
+                            "kind": ck
+                        }).execute()
+                        _toast("Categoria criada!")
+                    except Exception as e:
+                        st.error(f"Erro ao salvar: {e}")
 
-    st.markdown("#### Suas categorias")
+    st.markdown("---")
+    st.markdown("#### Suas Categorias")
     cats = fetch_categories(sb, HOUSEHOLD_ID) or []
     if not cats:
         st.info("Nenhuma categoria cadastrada.")
-    else:
-        col_inc, col_exp = st.columns(2)
-        with col_inc:
-            st.markdown("##### ➕ Receitas")
-            inc = [c["name"] for c in cats if c["kind"] == "income"]
-            if inc:
-                for n in inc: st.success(f"• **{n}**")
-            else:
-                st.info("Nenhuma categoria de receita.")
-        with col_exp:
-            st.markdown("##### ➖ Despesas")
-            exp = [c["name"] for c in cats if c["kind"] == "expense"]
-            if exp:
-                for n in exp: st.warning(f"• **{n}**")
-            else:
-                st.info("Nenhuma categoria de despesa.")
+        return
 
-# -------------------------
-# 💳 Cartões
-# -------------------------
-with tabs[3]:
-    st.subheader("Gestão de Cartões de Crédito")
+    col_inc, col_exp = st.columns(2)
+    with col_inc:
+        st.markdown("##### ➕ Receitas")
+        inc = [c for c in cats if c.get("kind") == "income"]
+        if inc:
+            for c in inc:
+                st.success(f"• **{c['name']}**")
+        else:
+            st.info("Nenhuma categoria de receita.")
+    with col_exp:
+        st.markdown("##### ➖ Despesas")
+        exp = [c for c in cats if c.get("kind") == "expense"]
+        if exp:
+            for c in exp:
+                st.warning(f"• **{c['name']}**")
+        else:
+            st.info("Nenhuma categoria de despesa.")
+
+# =========================
+# 4) Aba: Cartões
+# =========================
+def render_cards_tab():
+    st.subheader("💳 Cartões de Crédito")
 
     with st.form("form_new_card", clear_on_submit=True):
         col_nm, col_lim, col_closing, col_due = st.columns(4)
-        with col_nm:
-            nm = st.text_input("Nome do cartão")
-        with col_lim:
-            lim = st.number_input("Limite (R$)", min_value=0.0, step=100.0, value=0.0)
-        with col_closing:
-            closing = st.number_input("Fechamento (1-31)", min_value=1, max_value=31, value=5)
-        with col_due:
-            due = st.number_input("Vencimento (1-31)", min_value=1, max_value=31, value=15)
+        with col_nm: nm = st.text_input("Nome do Cartão")
+        with col_lim: lim = st.number_input("Limite (R$)", min_value=0.0, step=100.0, value=0.0)
+        # AGORA: 1–31
+        with col_closing: closing = st.number_input("Dia de Fechamento (1-31)", min_value=1, max_value=31, value=5)
+        with col_due:     due = st.number_input("Dia de Vencimento (1-31)", min_value=1, max_value=31, value=15)
+        can_save = st.form_submit_button("Salvar Cartão")
 
-        ok = st.form_submit_button("Salvar cartão")
-        if ok:
-            if not nm.strip():
+        if can_save:
+            if not OWNER:
+                st.error("Apenas owner pode criar cartões.")
+            elif not nm.strip():
                 st.error("Informe um nome.")
             elif lim <= 0:
                 st.error("Limite deve ser positivo.")
             else:
-                try:
-                    sb.table("credit_cards").insert(
-                        {
+                cards_all = fetch_cards(sb, HOUSEHOLD_ID, active_only=False) or []
+                if not _unique_name_guard([c["name"] for c in cards_all], nm):
+                    st.error("Já existe cartão com este nome.")
+                else:
+                    try:
+                        sb.table("credit_cards").insert({
                             "household_id": HOUSEHOLD_ID,
                             "name": nm.strip(),
                             "limit_amount": lim,
                             "closing_day": int(closing),
                             "due_day": int(due),
                             "is_active": True,
-                            "created_by": user.id,
-                        }
-                    ).execute()
-                    toast_ok("Cartão salvo.")
-                    clear_and_refresh_soft()
-                except Exception as e:
-                    st.error(f"Erro ao salvar cartão: {e}")
+                            "created_by": USER.id
+                        }).execute()
+                        _toast("Cartão criado!")
+                    except Exception as e:
+                        st.error(f"Erro ao salvar: {e}")
 
-    st.markdown("#### Seus cartões")
-    cards_all = fetch_cards(sb, HOUSEHOLD_ID, include_inactive=True) or []
+    st.markdown("---")
+    st.markdown("#### Seus Cartões")
+    cards_all = fetch_cards(sb, HOUSEHOLD_ID, active_only=False) or []
     limits = fetch_card_limits(sb, HOUSEHOLD_ID) or []
-    limap = {x["id"]: x for x in limits}
-
+    limap = {x.get("id"): x for x in limits}
     if not cards_all:
         st.info("Nenhum cartão cadastrado.")
-    else:
-        for c in cards_all:
-            available_limit = limap.get(c["id"], {}).get("available_limit", c["limit_amount"])
-            with st.container(border=True):
-                colA, colB, colC, colD, colE = st.columns([3, 2, 2, 2, 1])
-                with colA:
-                    st.markdown(f"{'🟢' if c['is_active'] else '🔴'} **{c['name']}**")
-                with colB:
-                    st.write(f"Limite: {to_brl(c['limit_amount'])}")
-                with colC:
-                    st.write(f"Disponível: {to_brl(available_limit)}")
-                with colD:
-                    st.info(f"Fecha {c['closing_day']} • Vence {c['due_day']}")
-                with colE:
-                    if st.button("Desativar" if c["is_active"] else "Ativar", key=f"card_tgl_{c['id']}"):
+        return
+    for c in cards_all:
+        available = limap.get(c["id"], {}).get("available_limit")
+        with st.container(border=True):
+            colA, colB, colC, colD, colE = st.columns([3,2,2,2,2])
+            with colA: st.markdown(f"**{c['name']}**")
+            with colB: st.write(f"Limite: {to_brl(c['limit_amount'])}")
+            with colC:
+                if available is None:
+                    st.caption("Disponível: —")
+                else:
+                    st.write(f"Disponível: {to_brl(available)}")
+            with colD:
+                st.info(f"Fecha {c['closing_day']} • Vence {c['due_day']}")
+            with colE:
+                lbl = "Desativar" if c.get("is_active") else "Ativar"
+                if st.button(lbl, key=f"card_toggle_{c['id']}"):
+                    if not OWNER:
+                        st.error("Apenas owner pode alterar status.")
+                    else:
                         try:
                             sb.table("credit_cards").update({"is_active": not c["is_active"]}).eq("id", c["id"]).execute()
-                            toast_ok("Status atualizado.")
-                            clear_and_refresh_soft()
+                            _toast("Status atualizado!")
                         except Exception as e:
-                            st.error(f"Erro ao atualizar cartão: {e}")
+                            st.error(f"Erro: {e}")
 
-# -------------------------
-# 🔗 Vínculos (conta/cartão ↔ membro)
-# -------------------------
-with tabs[4]:
-    st.subheader("Vínculo de Contas e Cartões a Membros")
-    st.caption("Opcional. Lançamentos já permitem escolher o member_id. Crie as tabelas para persistir vínculos formais.")
+# =========================
+# 5) Aba: Vínculos (membro ↔ contas/cartões)
+# =========================
+def render_links_tab():
+    st.subheader("🔗 Vínculos (Membro ↔ Contas / Cartões)")
+    st.caption("Defina responsáveis por contas e cartões. Útil para relatórios por pessoa.")
 
-    # tenta carregar vínculos; se as tabelas não existirem, apenas informa
-    try:
-        sb.table("account_members").select("id").limit(1).execute()
-        has_acc_tbl = True
-    except Exception:
-        has_acc_tbl = False
+    if not OWNER:
+        st.info("Apenas o **owner** pode gerenciar vínculos.")
+        return
 
-    try:
-        sb.table("card_members").select("id").limit(1).execute()
-        has_card_tbl = True
-    except Exception:
-        has_card_tbl = False
-
+    has_acc_tbl = _exists_table("account_members")
+    has_card_tbl = _exists_table("card_members")
     if not (has_acc_tbl or has_card_tbl):
-        st.info("Tabelas de vínculo não foram encontradas (account_members, card_members). "
-                "Os lançamentos ainda podem atribuir member_id normalmente. "
-                "Se quiser vínculos formais, crie essas tabelas no banco.")
-        st.stop()
+        st.warning("Tabelas de vínculo não foram encontradas (`account_members`, `card_members`). "
+                   "Os lançamentos ainda podem atribuir `member_id` normalmente. "
+                   "Crie essas tabelas no banco para persistir os vínculos.")
 
     mems = fetch_members(sb, HOUSEHOLD_ID) or []
-    accs = fetch_accounts(sb, HOUSEHOLD_ID, include_inactive=False) or []
-    cards = fetch_cards(sb, HOUSEHOLD_ID, include_inactive=False) or []
+    accs = fetch_accounts(sb, HOUSEHOLD_ID, active_only=True) or []
+    cards = fetch_cards(sb, HOUSEHOLD_ID, active_only=True) or []
 
-    member_map = {m["display_name"]: m["id"] for m in mems}
-    acc_map = {a["name"]: a["id"] for a in accs}
-    card_map = {c["name"]: c["id"] for c in cards}
+    if not mems:
+        st.info("Cadastre membros primeiro.")
+        return
 
-    col_v1, col_v2 = st.columns(2)
+    member = st.selectbox("Selecione o membro", mems, format_func=lambda m: m.get("display_name"))
 
-    with col_v1:
-        st.markdown("##### Vínculo de Conta → Membro")
-        v_mem = st.selectbox("Membro", list(member_map.keys())) if mems else None
-        v_acc = st.selectbox("Conta", list(acc_map.keys())) if accs else None
-        if st.button("Vincular conta"):
+    with st.expander("Vincular Contas", expanded=True):
+        chosen_accs = st.multiselect(
+            f"Contas sob responsabilidade de {member.get('display_name')}",
+            accs, format_func=lambda a: a.get("name")
+        )
+        if st.button("Salvar vínculos de contas", use_container_width=True, key="save_link_accounts"):
             if not has_acc_tbl:
-                st.warning("Tabela account_members ausente. Sem persistência.")
-            elif v_mem and v_acc:
+                st.warning("Tabela `account_members` ausente. Sem persistência.")
+            else:
                 try:
-                    sb.table("account_members").upsert(
-                        {"household_id": HOUSEHOLD_ID, "member_id": member_map[v_mem], "account_id": acc_map[v_acc]},
-                        on_conflict="household_id,member_id,account_id",
-                    ).execute()
-                    toast_ok("Vínculo conta↔membro salvo.")
+                    sb.table("account_members").delete().eq("household_id", HOUSEHOLD_ID).eq("member_id", member["id"]).execute()
+                    if chosen_accs:
+                        rows = [{
+                            "household_id": HOUSEHOLD_ID,
+                            "account_id": a["id"],
+                            "member_id": member["id"]
+                        } for a in chosen_accs]
+                        sb.table("account_members").insert(rows).execute()
+                    _toast("Vínculos de contas salvos!")
                 except Exception as e:
-                    st.error(f"Erro ao vincular conta: {e}")
+                    st.error(f"Erro ao salvar vínculos de contas: {e}")
 
-    with col_v2:
-        st.markdown("##### Vínculo de Cartão → Membro")
-        v_mem2 = st.selectbox("Membro ", list(member_map.keys()), key="vm2") if mems else None
-        v_card = st.selectbox("Cartão", list(card_map.keys())) if cards else None
-        if st.button("Vincular cartão"):
+    with st.expander("Vincular Cartões", expanded=False):
+        chosen_cards = st.multiselect(
+            f"Cartões sob responsabilidade de {member.get('display_name')}",
+            cards, format_func=lambda c: c.get("name")
+        )
+        if st.button("Salvar vínculos de cartões", use_container_width=True, key="save_link_cards"):
             if not has_card_tbl:
-                st.warning("Tabela card_members ausente. Sem persistência.")
-            elif v_mem2 and v_card:
+                st.warning("Tabela `card_members` ausente. Sem persistência.")
+            else:
                 try:
-                    sb.table("card_members").upsert(
-                        {"household_id": HOUSEHOLD_ID, "member_id": member_map[v_mem2], "card_id": card_map[v_card]},
-                        on_conflict="household_id,member_id,card_id",
-                    ).execute()
-                    toast_ok("Vínculo cartão↔membro salvo.")
+                    sb.table("card_members").delete().eq("household_id", HOUSEHOLD_ID).eq("member_id", member["id"]).execute()
+                    if chosen_cards:
+                        rows = [{
+                            "household_id": HOUSEHOLD_ID,
+                            "card_id": c["id"],
+                            "member_id": member["id"]
+                        } for c in chosen_cards]
+                        sb.table("card_members").insert(rows).execute()
+                    _toast("Vínculos de cartões salvos!")
                 except Exception as e:
-                    st.error(f"Erro ao vincular cartão: {e}")
+                    st.error(f"Erro ao salvar vínculos de cartões: {e}")
+
+# =========================
+# 6) Aba: Família / Árvore (cadastro de relações)
+# =========================
+def render_family_tab():
+    st.subheader("🌳 Família / Relações")
+    st.caption("Cadastre relações (pais, filhos, cônjuge, tios, primos, etc.).")
+
+    if not OWNER:
+        st.info("Apenas **owner** pode editar relações familiares.")
+        return
+
+    has_rel_tbl = _exists_table("relationships")
+    if not has_rel_tbl:
+        st.warning("Tabela `relationships` não encontrada. Crie-a para registrar relações familiares.")
+        return
+
+    mems = fetch_members(sb, HOUSEHOLD_ID) or []
+    if len(mems) < 2:
+        st.info("Cadastre pelo menos duas pessoas para criar uma relação.")
+        return
+
+    left = st.selectbox("Pessoa A", mems, format_func=lambda m: m.get("display_name"))
+    right = st.selectbox("Pessoa B", [m for m in mems if m["id"] != left["id"]], format_func=lambda m: m.get("display_name"))
+    relation = st.selectbox(
+        "Relação de A para B",
+        ["parent", "child", "spouse", "sibling", "uncle_aunt", "nephew_niece", "cousin", "in_law", "other"],
+        format_func=lambda k: {
+            "parent": "Ascendente (A é pai/mãe de B)",
+            "child": "Descendente (A é filho/filha de B)",
+            "spouse": "Cônjuge",
+            "sibling": "Irmão/irmã",
+            "uncle_aunt": "Tio/Tia",
+            "nephew_niece": "Sobrinho/Sobrinha",
+            "cousin": "Primo/Prima",
+            "in_law": "Parente por afinidade (cunhado/…)",
+            "other": "Outro",
+        }[k]
+    )
+    if st.button("Salvar relação", use_container_width=True):
+        try:
+            sb.table("relationships").upsert({
+                "household_id": HOUSEHOLD_ID,
+                "member_a": left["id"],
+                "member_b": right["id"],
+                "relation": relation
+            }, on_conflict="household_id,member_a,member_b").execute()
+            _toast("Relação salva!")
+        except Exception as e:
+            st.error(f"Erro ao salvar relação: {e}")
+
+    st.markdown("---")
+    st.markdown("#### Relações existentes")
+    try:
+        rows = sb.table("relationships").select("*").eq("household_id", HOUSEHOLD_ID).execute().data or []
+        if not rows:
+            st.info("Nenhuma relação registrada.")
+        else:
+            def name(mid):
+                m = next((x for x in mems if x["id"] == mid), None)
+                return m["display_name"] if m else mid
+            df = pd.DataFrame([{
+                "A": name(r["member_a"]),
+                "Relação": r["relation"],
+                "B": name(r["member_b"])
+            } for r in rows])
+            st.dataframe(df, use_container_width=True)
+    except Exception as e:
+        st.error(f"Erro ao ler relações: {e}")
+
+# =========================
+# 7) Renderização das Abas
+# =========================
+tabs = st.tabs(["👥 Membros", "💰 Contas", "🏷️ Categorias", "💳 Cartões", "🔗 Vínculos", "🌳 Família"])
+
+with tabs[0]:
+    with st.container(border=True):
+        render_members_tab()
+
+with tabs[1]:
+    with st.container(border=True):
+        render_accounts_tab()
+
+with tabs[2]:
+    with st.container(border=True):
+        render_categories_tab()
+
+with tabs[3]:
+    with st.container(border=True):
+        render_cards_tab()
+
+with tabs[4]:
+    with st.container(border=True):
+        render_links_tab()
+
+with tabs[5]:
+    with st.container(border=True):
+        render_family_tab()
