@@ -2,3 +2,4 @@ streamlit>=1.36
 supabase>=2.6
 pandas>=2.2
 python-dateutil>=2.9
+plotly>=5.0
