@@ -8,7 +8,7 @@ import pandas as pd
 from utils import (
     to_brl,
     fetch_members, fetch_accounts, fetch_categories, fetch_cards, fetch_card_limits,
-    send_email,  # fallback de e-mail
+    send_email,  # fallback de e-mail (mantido, mas não usado neste fluxo)
 )
 
 # =========================
@@ -23,6 +23,9 @@ HOUSEHOLD_ID = st.session_state.HOUSEHOLD_ID
 USER = st.session_state.user
 
 st.title("🧰 Administração do Sistema Financeiro")
+
+# URL base do app para construir o link de convite
+APP_URL = "https://familyfinance.streamlit.app"
 
 # =========================
 # Helpers
@@ -113,7 +116,7 @@ def render_members_tab():
             file = st.file_uploader("Enviar nova foto (PNG/JPG)", type=["png", "jpg", "jpeg"], key="upload_avatar")
             if file and my_member_id:
                 try:
-                    # tenta listar para verificar existência do bucket
+                    # verifica existência do bucket
                     sb.storage.from_("avatars").list("")
                 except Exception:
                     st.error("Bucket 'avatars' não existe no Storage. Crie-o como público em Supabase → Storage.")
@@ -131,73 +134,66 @@ def render_members_tab():
 
     st.markdown("---")
 
-    # --- 1.2 Convites (owner) — Edge Function primeiro, depois RPC e por último send_email
+    # --- 1.2 Convites (owner) — fluxo por link copiável (pending_invites + RPCs)
     with st.expander("Convidar novo membro (somente owner)", expanded=False):
         if not OWNER:
             st.info("Apenas o **owner** pode enviar convites.")
         else:
-            invite_email = st.text_input("E-mail do convidado", key="invite_email").strip()
+            st.caption("Gere um link único para compartilhar com o convidado. Ele expira automaticamente.")
+            invite_email = st.text_input("E-mail do convidado (opcional)", key="invite_email").strip()
             invite_name = st.text_input("Nome a exibir (opcional)", key="invite_name").strip()
-            if st.button("Enviar convite", use_container_width=True, key="btn_send_invite"):
-                if not invite_email:
-                    st.warning("Informe um e-mail válido.")
+            expires_in = st.number_input("Expirar em (dias)", min_value=1, max_value=30, value=7, step=1)
+
+            if st.button("Gerar link de convite", use_container_width=True, key="btn_create_invite_link"):
+                # Chama RPC create_invite_link (security definer) conforme migração
+                res = _safe_rpc("create_invite_link", {
+                    "p_household_id": HOUSEHOLD_ID,
+                    "p_email": invite_email or None,
+                    "p_display_name": invite_name or None,
+                    "p_expires_in_days": int(expires_in),
+                    "p_app_url": APP_URL,
+                })
+                data = (res.data[0] if res and isinstance(res.data, list) and res.data else
+                        res.data if res and isinstance(res.data, dict) else None)
+                if data and data.get("url"):
+                    st.success("Convite criado!")
+                    st.text_input("Link do convite", value=data["url"], label_visibility="visible", disabled=True)
+                    st.caption("Envie este link ao convidado. Ao acessar logado, ele será incluído na sua família.")
                 else:
-                    # 1) Tenta Edge Function 'send-invite'
-                    ef_error = None
-                    try:
-                        ef_resp = sb.functions.invoke(
-                            "send-invite",
-                            body={
-                                "household_id": HOUSEHOLD_ID,
-                                "email": invite_email,
-                                "display_name": invite_name or None,
-                                "invited_by": USER.id,
-                                "app_url": "https://familyfinance.streamlit.app",
-                            },
-                        )
-                        data = getattr(ef_resp, "data", {}) or {}
-                        if data.get("ok"):
-                            if data.get("email_sent"):
-                                _toast("Convite enviado por e-mail!")
-                            else:
-                                _toast("Convite registrado (sem e-mail). Repasse o link manualmente.", icon="ℹ️")
-                            return
-                        ef_error = data
-                    except Exception as e:
-                        ef_error = str(e)
+                    st.error(f"Falha ao criar convite. Detalhes: {getattr(res, 'data', None)}")
 
-                    # 2) Fallback: RPC invite_member (registra convite no banco)
-                    called = _safe_rpc("invite_member", {
-                        "p_household_id": HOUSEHOLD_ID,
-                        "p_email": invite_email,
-                        "p_display_name": invite_name or None
-                    })
-                    if called is not None:
-                        _toast("Convite registrado! O convidado poderá aceitar ao criar/login.")
-                        if ef_error:
-                            st.caption(f"Detalhe da Edge Function (debug): {ef_error}")
-                        return
-
-                    # 3) Último fallback: util send_email() (SMTP local/Resend/etc)
-                    ok = send_email(
-                        [invite_email],
-                        subject="Convite - Family Finance",
-                        body=(
-                            "Olá!\n\n"
-                            "Você foi convidado para participar do Family Finance.\n"
-                            "Crie sua conta na página inicial e, após login, aceite o convite pendente.\n\n"
-                            "Abraços!"
-                        )
-                    )
-                    if ok:
-                        _toast("Convite enviado por e-mail!")
-                    else:
-                        st.warning(
-                            "Não foi possível enviar e-mail neste ambiente. "
-                            "Configure a Edge Function, SMTP em `send_email` ou use a tabela `pending_invites`."
-                        )
-                    if ef_error:
-                        st.caption(f"Detalhe da Edge Function (debug): {ef_error}")
+            st.markdown("##### Convites pendentes")
+            try:
+                # lista os pendentes do household
+                pend = sb.table("pending_invites") \
+                         .select("id, email, display_name, token, status, expires_at, created_at") \
+                         .eq("household_id", HOUSEHOLD_ID) \
+                         .neq("status", "used") \
+                         .order("created_at", desc=True) \
+                         .execute().data or []
+                if not pend:
+                    st.info("Nenhum convite pendente.")
+                else:
+                    for inv in pend:
+                        with st.container(border=True):
+                            c1, c2, c3 = st.columns([4, 3, 2])
+                            with c1:
+                                st.markdown(f"**Para:** {inv.get('email') or '(sem e-mail)'} — {inv.get('display_name') or ''}")
+                                # constrói o link a partir do token (caso queira copiar de novo)
+                                url = f"{APP_URL}/?join={inv.get('token')}"
+                                st.caption(f"Link: {url}")
+                            with c2:
+                                st.write(f"Expira em: {inv.get('expires_at')}")
+                                st.info(f"Status: {inv.get('status')}")
+                            with c3:
+                                if st.button("Revogar", key=f"revoke_{inv['id']}"):
+                                    r = _safe_rpc("revoke_invite", {"p_invite_id": inv["id"]})
+                                    if r is not None:
+                                        _toast("Convite revogado!")
+                                    else:
+                                        st.error("Falha ao revogar convite.")
+            except Exception as e:
+                st.error(f"Erro ao listar convites: {e}")
 
     st.markdown("---")
 
@@ -221,7 +217,8 @@ def render_members_tab():
         gb.configure_selection("single")
         gb.configure_column("id", hide=True)
         gb.configure_column("Nome", editable=OWNER)
-        gb.configure_column("Papel", editable=OWNER, cellEditor="agSelectCellEditor", cellEditorParams={"values": ["member", "owner"]})
+        gb.configure_column("Papel", editable=OWNER, cellEditor="agSelectCellEditor",
+                            cellEditorParams={"values": ["member", "owner"]})
         grid_options = gb.build()
 
         grid = AgGrid(
