@@ -17,25 +17,31 @@ class FFConfigError(RuntimeError):
 def _read_creds() -> Tuple[str, str]:
     """
     Lê credenciais do Supabase a partir de:
-    1) st.secrets['supabase'] (recomendado)
-    2) Variáveis de ambiente SUPABASE_URL / SUPABASE_KEY (fallback)
+      1) st.secrets['supabase'] -> aceita 'key' OU 'anon_key'
+      2) Variáveis de ambiente SUPABASE_URL / SUPABASE_KEY (fallback)
     """
     url: Optional[str] = None
     key: Optional[str] = None
 
     # 1) st.secrets
     try:
-        url = st.secrets["supabase"]["url"]  # type: ignore[index]
-        key = st.secrets["supabase"]["key"]  # type: ignore[index]
+        sect = st.secrets["supabase"]  # type: ignore[index]
+        # aceita 'key' ou 'anon_key'
+        url = sect.get("url") if isinstance(sect, dict) else None  # type: ignore[attr-defined]
+        key = (sect.get("key") or sect.get("anon_key")) if isinstance(sect, dict) else None  # type: ignore[attr-defined]
     except Exception:
-        # 2) Fallback: env vars
+        pass
+
+    # 2) Fallback: env vars
+    if not url:
         url = os.getenv("SUPABASE_URL")
+    if not key:
         key = os.getenv("SUPABASE_KEY")
 
     if not url or not key:
         raise FFConfigError(
             "Credenciais do Supabase ausentes. Defina em st.secrets['supabase'] "
-            "ou nas variáveis de ambiente SUPABASE_URL e SUPABASE_KEY."
+            "(url + key/anon_key) ou nas variáveis de ambiente SUPABASE_URL e SUPABASE_KEY."
         )
     return str(url).strip(), str(key).strip()
 
@@ -44,7 +50,6 @@ def _sanitize_url(url: str) -> str:
     u = url.strip()
     if not u.startswith("https://"):
         raise FFConfigError("A URL do Supabase deve iniciar com https://")
-    # Opcional: validação leve do domínio
     host = re.sub(r"^https://", "", u).split("/")[0]
     if "." not in host:
         raise FFConfigError(f"URL inválida (host sem ponto): {u}")
@@ -63,7 +68,7 @@ def _validate_dns(url: str) -> None:
 def get_supabase() -> Client:
     """
     Retorna um client do Supabase com cache por sessão.
-    Lê de st.secrets ou de variáveis de ambiente e valida URL/DNS.
+    Lê st.secrets (key/anon_key) ou variáveis de ambiente e valida URL/DNS.
     """
     url, key = _read_creds()
     url = _sanitize_url(url)
