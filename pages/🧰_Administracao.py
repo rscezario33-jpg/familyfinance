@@ -75,7 +75,7 @@ def render_members_tab():
         mems = fetch_members(sb, HOUSEHOLD_ID) # Busca membros para encontrar o nome do usuário logado
         if mems:
             for m in mems:
-                if m["user_id"] == user.id:
+                if m["user_id"] == user.id: # <-- Aqui o 'user_id' é necessário!
                     current_member_name = m["display_name"]
                     break
 
@@ -362,7 +362,7 @@ def render_cards_tab():
 
 # --- 4. Renderização Principal das Abas ---
 # Definimos as abas e chamamos as funções de renderização para cada uma.
-tabs = st.tabs(["👥 Membros", "�� Contas", "🏷️ Categorias", "💳 Cartões"])
+tabs = st.tabs(["👥 Membros", "💰 Contas", "🏷️ Categorias", "💳 Cartões"])
 
 with tabs[0]:
     with st.container(border=True): # Agrupador visual para a aba Membros
