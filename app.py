@@ -37,22 +37,19 @@ st.markdown("""
   --danger:#ef4444;
   --danger-700:#dc2626;
   --radius: 14px;
-  --pad: 10px;
 }
 
 /* Streamlit padrão */
-.st-emotion-cache-zt5igj { /* Esconde o botão "Made with Streamlit" */
-    visibility: hidden;
-}
+.st-emotion-cache-zt5igj { visibility: hidden; }  /* "Made with Streamlit" */
 div.stSpinner > div { text-align: center; color: var(--sb-fg); }
 div.stSpinner > div > span { color: var(--sb-fg); }
 
-/* Sidebar base */
-section[data-testid="stSidebar"] > div {
-    background: var(--sb-bg) !important;
-    color: var(--sb-fg) !important;
-    box-shadow: 2px 0 5px rgba(0,0,0,0.1);
-    position: relative; /* permite posicionar a logo */
+/* ===== Sidebar base ===== */
+section[data-testid="stSidebar"] > div{
+  background: var(--sb-bg) !important;
+  color: var(--sb-fg) !important;
+  box-shadow: 2px 0 5px rgba(0,0,0,0.1);
+  position: relative; /* permite a logo absoluta */
 }
 
 /* Layout coluna full-height */
@@ -60,7 +57,7 @@ section[data-testid="stSidebar"] > div > div.stVerticalBlock:first-of-type{
   display:flex; flex-direction:column; min-height:100vh;
 }
 
-/* ---------- LOGO fixa acima do menu ---------- */
+/* ===== LOGO fixa acima do menu ===== */
 section[data-testid="stSidebar"] img:first-of-type{
   position:absolute;
   top:14px; left:50%; transform:translateX(-50%);
@@ -71,35 +68,16 @@ section[data-testid="stSidebar"] img:first-of-type{
   z-index:5;
 }
 
-/* “Respiro” para nav descer abaixo da logo */
+/* ===== NAV nativa centralizada em “cards” ===== */
 section[data-testid="stSidebar"] div[data-testid="stSidebarNav"]{
   order:3; flex:1 1 auto;
   display:flex; flex-direction:column; justify-content:center;
   padding:6px 10px;
-  margin-top:110px; /* ajuste fino conforme altura da logo */
+  margin-top:120px; /* empurra o menu abaixo da logo (ajuste fino conforme altura da sua logo) */
 }
-
-/* Separadores finos (estilo imagem 2) */
-.sidebar-group{
-  order:2;
-  border-top:1px solid var(--line);
-  margin:12px 12px 6px 12px;
-  padding-top:8px;
-}
-
-/* Tipografia da sidebar */
-section[data-testid="stSidebar"] label,
-section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] > div,
-section[data-testid="stSidebar"] .stMarkdown,
-section[data-testid="stSidebar"] p,
-section[data-testid="stSidebar"] span,
-section[data-testid="stSidebar"] a { color: var(--sb-fg) !important; }
-
-/* ---------- NAV em “cards” ---------- */
-section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] ul{
-  list-style:none; margin:0; padding:0;
-}
+section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] ul{ list-style:none; margin:0; padding:0; }
 section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] li{ margin:10px 0; }
+
 section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] li a{
   display:flex; align-items:center; gap:10px;
   padding:14px 16px; margin:0 2px;
@@ -116,7 +94,7 @@ section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] li a:hover{
   border-color: rgba(255,255,255,.18);
   transform: translateY(-1px);
 }
-/* Ativo (robusto via aria-current) */
+/* Link ativo robusto (aria-current) */
 section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] li a[aria-current="page"]{
   background:linear-gradient(180deg, var(--brand) 0%, #11b7ff 100%);
   color:#001523 !important;
@@ -124,49 +102,57 @@ section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] li a[aria-curre
   box-shadow: 0 6px 14px rgba(0,165,233,.35);
 }
 
-/* Expanders agrupados: remove cabeçalho/padding */
-section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] .stExpander > div > div:first-child{ display:none; }
-section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] .stExpander div[data-testid="stVerticalBlock"]{ padding:0; }
+/* ===== Separadores finos (como imagem 2) ===== */
+.sidebar-group{
+  border-top:1px solid var(--line);
+  margin:12px 12px 6px 12px;
+  padding-top:8px;
+}
 
-/* ---------- Bloco “Logado:” ---------- */
+/* Tipografia dentro da sidebar */
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] .stRadio div[role="radiogroup"] > div,
+section[data-testid="stSidebar"] .stMarkdown,
+section[data-testid="stSidebar"] p,
+section[data-testid="stSidebar"] span,
+section[data-testid="stSidebar"] a { color: var(--sb-fg) !important; }
+
+/* ===== Bloco “Logado:” ===== */
 .user-email-display{
-  order:4;
   margin:8px 16px 10px 16px;
   padding:8px 4px 0 4px;
   font-size:.92rem; opacity:.95;
   border-top:1px solid var(--line);
 }
 
-/* ---------- Botão Sair corrigido (wrapper .ff-logout) ---------- */
-.ff-logout .stButton>button{
-  width:100%;
-  border-radius:14px;
-  background:var(--danger);
-  border:1px solid var(--danger);
-  color:#fff; font-weight:700;
-  padding:10px 0;
-  transition:all .18s ease-in-out;
-  box-shadow: 0 4px 10px rgba(0,0,0,.2);
+/* ===== Botão SAIR (força o último botão da sidebar) ===== */
+section[data-testid="stSidebar"] .stButton:last-of-type button{
+  display:block !important;
+  width: calc(100% - 32px) !important;
+  margin: 8px 16px 2px 16px !important;
+  border-radius:14px !important;
+  background:var(--danger) !important;
+  border:1px solid var(--danger) !important;
+  color:#fff !important;
+  font-weight:700 !important;
+  padding:10px 0 !important;
+  box-shadow: 0 4px 10px rgba(0,0,0,.2) !important;
 }
-.ff-logout .stButton>button:hover{
-  background:var(--danger-700); border-color:var(--danger-700); transform:translateY(-1px);
+section[data-testid="stSidebar"] .stButton:last-of-type button:hover{
+  background:var(--danger-700) !important; border-color:var(--danger-700) !important; transform:translateY(-1px);
 }
 
-/* Linha antes do rodapé */
-section[data-testid="stSidebar"] .sidebar-group:nth-of-type(4){ order:7; }
-
-/* ---------- Rodapé fixo ---------- */
-section[data-testid="stSidebar"] .small{
-  order:8; text-align:center; opacity:.9;
-  margin: 6px 0 2px 0;
+/* ===== Rodapé “Powered by” ===== */
+section[data-testid="stSidebar"] .small{ 
+  text-align:center; opacity:.9; margin: 6px 0 2px 0;
 }
 section[data-testid="stSidebar"] img[src*="logo_automaGO"]{
-  order:9; display:block; margin:6px auto 14px auto;
+  display:block; margin:6px auto 14px auto;
   max-width:46%;
   filter: drop-shadow(0 1px 3px rgba(0,0,0,.25));
 }
 
-/* Inputs/botões gerais (mantidos) */
+/* ===== Inputs/botões gerais (mantidos) ===== */
 .stButton>button, .stDownloadButton>button{
   border-radius:10px; padding:.55rem .9rem; font-weight:600;
   border:1px solid var(--brand); background:var(--brand); color:white;
@@ -181,14 +167,13 @@ section[data-testid="stSidebar"] img[src*="logo_automaGO"]{
   border-radius:10px !important; border:1px solid #e2e8f0;
 }
 
-/* Cards e badges (mantidos) */
+/* ===== Cards/badges, Welcome e Dashboard (mantidos) ===== */
 .card{ background:linear-gradient(180deg,#fff 0%,#f8fafc 100%); border:1px solid #e2e8f0; border-radius:16px; padding:16px 18px; box-shadow:0 6px 20px rgba(0,0,0,.06); margin-bottom:12px; }
 .badge{ display:inline-flex; align-items:center; gap:.5rem; background:#eef6ff; color:#0369a1; border:1px solid #bfdbfe; padding:.35rem .6rem; border-radius:999px; font-weight:600; margin:4px 6px 0 0; }
 .badge.red{background:#fff1f2;color:#9f1239;border-color:#fecdd3;}
 .badge.green{background:#ecfdf5;color:#065f46;border-color:#bbf7d0;}
-.small{ font-size:.85rem; opacity:.75; }
+.small { font-size:.85rem; opacity:.75; }
 
-/* Boas-vindas (mantido) */
 .welcome-container{
   display:flex; flex-direction:column; align-items:center; justify-content:center;
   min-height:100vh; text-align:center; padding:20px;
@@ -202,7 +187,6 @@ section[data-testid="stSidebar"] img[src*="logo_automaGO"]{
 .welcome-container .stButton > button{ background:var(--brand); border:none; color:white; padding:10px 25px; font-size:1.2rem; border-radius:8px; transition:all .3s ease; }
 .welcome-container .stButton > button:hover{ background:var(--brand-700); transform:translateY(-2px); }
 
-/* Dashboard (mantido) */
 .dashboard-title{ font-size:2.2rem; font-weight:700; color:#0b2038; margin-bottom:25px; }
 .metric-box{ background:linear-gradient(145deg,#ffffff,#f0f2f5); border-radius:12px; padding:20px; box-shadow:0 4px 15px rgba(0,0,0,0.08); display:flex; flex-direction:column; justify-content:space-between; min-height:120px; margin-bottom:15px; border:1px solid #e0e0e0; transition:all .2s ease-in-out; }
 .metric-box:hover{ transform:translateY(-3px); box-shadow:0 6px 20px rgba(0,0,0,0.12); }
@@ -293,22 +277,22 @@ with st.sidebar:
     # Se autenticado:
     user = _user()
     st.session_state.user = user # Armazena o objeto user na sessão
+    # Usando uma div com classe para o email do usuário para facilitar o CSS
     st.markdown(f'<div class="user-email-display">Logado: {user.email if user else ""}</div>', unsafe_allow_html=True)
     st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)
 
-    # (A navegação nativa aparece aqui automaticamente; posicionada via CSS)
+    # A navegação de páginas nativa do Streamlit será renderizada aqui
+    # e posicionada via CSS 'order' property. Não precisamos de st.radio.
+    
+    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True) # Divisor antes do botão Sair
 
-    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)  # Linha antes do sair
-
-    # Wrapper para estilizar o botão sair sem afetar outros
-    st.markdown('<div class="ff-logout">', unsafe_allow_html=True)
+    # Botão Sair
     if st.button("Sair", key="sidebar_logout_button"):
         _signout()
-    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True)  # Linha depois do sair
+    st.markdown('<div class="sidebar-group"></div>', unsafe_allow_html=True) # Divisor após o botão Sair
 
-    # Rodapé
+    # Logo AutomaGO no rodapé, centralizada
     st.markdown('<div class="small" style="text-align:center;opacity:.9;">Powered by</div>', unsafe_allow_html=True)
     st.image("assets/logo_automaGO.png", width=80)
 
