@@ -9,6 +9,7 @@ from email.message import EmailMessage
 from typing import List, Optional
 import pandas as pd
 import streamlit as st
+from supabase import Client # <--- IMPORTAÇÃO NECESSÁRIA PARA O hash_funcs
 
 # Assumimos que 'sb' e 'user' serão passados ou acessíveis via st.session_state
 
@@ -45,7 +46,8 @@ def _safe_table(sb, HOUSEHOLD_ID, name: str):
 # --- Fetchers de Dados ---
 # Todas as funções fetcher precisarão de 'sb' e 'HOUSEHOLD_ID'
 
-@st.cache_data(ttl=600) # Adicionei o cache para melhor performance
+# Adicionado hash_funcs para o objeto Supabase Client
+@st.cache_data(ttl=600, hash_funcs={Client: lambda _: None})
 def fetch_members(sb, HOUSEHOLD_ID):
     try:
         # CORREÇÃO AQUI: Adicionei 'user_id' à seleção
@@ -55,7 +57,8 @@ def fetch_members(sb, HOUSEHOLD_ID):
         st.error(f"Erro ao buscar membros: {e}") # Feedback mais claro se a consulta principal falhar
         return _safe_table(sb, HOUSEHOLD_ID, "members") # Fallback para _safe_table
 
-@st.cache_data(ttl=600) # Adicionei o cache para melhor performance
+# Adicionado hash_funcs para o objeto Supabase Client
+@st.cache_data(ttl=600, hash_funcs={Client: lambda _: None})
 def fetch_categories(sb, HOUSEHOLD_ID):
     try:
         return sb.table("categories").select("id,name,kind") \
@@ -64,7 +67,8 @@ def fetch_categories(sb, HOUSEHOLD_ID):
         st.error(f"Erro ao buscar categorias: {e}")
         return _safe_table(sb, HOUSEHOLD_ID, "categories")
 
-@st.cache_data(ttl=600) # Adicionei o cache para melhor performance
+# Adicionado hash_funcs para o objeto Supabase Client
+@st.cache_data(ttl=600, hash_funcs={Client: lambda _: None})
 def fetch_accounts(sb, HOUSEHOLD_ID, active_only=False):
     q = sb.table("accounts").select("id,name,is_active,type,opening_balance").eq("household_id", HOUSEHOLD_ID) # Adicionei opening_balance
     if active_only:
@@ -77,7 +81,8 @@ def fetch_accounts(sb, HOUSEHOLD_ID, active_only=False):
     data.sort(key=lambda a:(a.get("name") or "").lower())
     return data
 
-@st.cache_data(ttl=600) # Adicionei o cache para melhor performance
+# Adicionado hash_funcs para o objeto Supabase Client
+@st.cache_data(ttl=600, hash_funcs={Client: lambda _: None})
 def fetch_cards(sb, HOUSEHOLD_ID, active_only=True):
     q = sb.table("credit_cards").select("id,household_id,name,limit_amount,closing_day,due_day,is_active,created_by") \
         .eq("household_id", HOUSEHOLD_ID)
@@ -91,7 +96,8 @@ def fetch_cards(sb, HOUSEHOLD_ID, active_only=True):
     data.sort(key=lambda c:(c.get("name") or "").lower())
     return data
 
-@st.cache_data(ttl=600) # Adicionei o cache para melhor performance
+# Adicionado hash_funcs para o objeto Supabase Client
+@st.cache_data(ttl=600, hash_funcs={Client: lambda _: None})
 def fetch_card_limits(sb, HOUSEHOLD_ID):
     try:
         data = sb.table("v_card_limit").select("*").eq("household_id", HOUSEHOLD_ID).execute().data or []
@@ -101,7 +107,8 @@ def fetch_card_limits(sb, HOUSEHOLD_ID):
     data.sort(key=lambda c:(c.get("name") or "").lower())
     return data
 
-@st.cache_data(ttl=600) # Adicionei o cache para melhor performance
+# Adicionado hash_funcs para o objeto Supabase Client
+@st.cache_data(ttl=600, hash_funcs={Client: lambda _: None})
 def fetch_tx(sb, HOUSEHOLD_ID, start: date, end: date):
     rows = _safe_table(sb, HOUSEHOLD_ID, "transactions") #_safe_table já possui cache implícito
     out=[]
@@ -112,7 +119,8 @@ def fetch_tx(sb, HOUSEHOLD_ID, start: date, end: date):
     out.sort(key=lambda t: (_to_date_safe(t.get("due_date")) or _to_date_safe(t.get("occurred_at")) or date.min))
     return out
 
-@st.cache_data(ttl=600) # Adicionei o cache para melhor performance
+# Adicionado hash_funcs para o objeto Supabase Client
+@st.cache_data(ttl=600, hash_funcs={Client: lambda _: None})
 def fetch_tx_due(sb, HOUSEHOLD_ID, start: date, end: date):
     rows = _safe_table(sb, HOUSEHOLD_ID, "transactions") #_safe_table já possui cache implícito
     out=[]
@@ -122,7 +130,7 @@ def fetch_tx_due(sb, HOUSEHOLD_ID, start: date, end: date):
         key = dd or od
         if key and start <= key <= end:
             out.append(t)
-    out.sort(key=lambda t: (_to_to_date_safe(t.get("due_date")) or _to_date_safe(t.get("occurred_at")) or date.min))
+    out.sort(key=lambda t: (_to_date_safe(t.get("due_date")) or _to_date_safe(t.get("occurred_at")) or date.min))
     return out
 
 # --- SMTP (opcional) ---
