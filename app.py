@@ -219,11 +219,24 @@ if st.session_state.auth_ok and "HOUSEHOLD_ID" not in st.session_state:
     # A lógica de ser executada apenas uma vez é controlada pelo 'if "HOUSEHOLD_ID" not in st.session_state:'.
     def bootstrap(user_id: str, supabase_client):
         try:
+            # Tenta aceitar convites pendentes, se a função existir e tiver lógica
             supabase_client.rpc("accept_pending_invite").execute()
         except Exception:
-            pass # Ignora se não houver convites pendentes ou função não existir
+            pass # Ignora se não houver convites pendentes ou função não existir ou falhar por outros motivos
 
-        res = supabase_client.rpc("create_household_and_member", {"display_name": "Você"}).execute().data
+        # Chama a RPC create_household_and_member que agora lida com a existência do membro internamente
+        try:
+            res = supabase_client.rpc("create_household_and_member", {"display_name": "Você"}).execute().data
+        except Exception as e:
+            # Qualquer outra falha na RPC (que não seja "já existe", pois isso é tratado)
+            st.error(f"Falha ao inicializar o household: {e}. Por favor, tente novamente ou contate o suporte.")
+            st.stop()
+
+        # Verifica se a resposta da RPC é válida
+        if not res or not res[0].get("household_id") or not res[0].get("member_id"):
+            st.error("Resposta inválida do servidor ao inicializar o household. Por favor, tente novamente ou contate o suporte.")
+            st.stop()
+
         return {"household_id": res[0]["household_id"], "member_id": res[0]["member_id"]}
 
     ids = bootstrap(st.session_state.user.id, sb)
