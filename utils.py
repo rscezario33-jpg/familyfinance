@@ -9,15 +9,15 @@ from email.message import EmailMessage
 from typing import List, Optional
 import pandas as pd
 import streamlit as st
-from supabase import Client # <--- IMPORTAÇÃO NECESSÁRIA PARA O hash_funcs
+from supabase import Client  # IMPORTANTE para hash_funcs
 
 # Assumimos que 'sb' e 'user' serão passados ou acessíveis via st.session_state
 
 def to_brl(v: float) -> str:
     try:
-        return f"R\$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     except Exception:
-        return "R\$ 0,00"
+        return "R$ 0,00"
 
 def _to_date_safe(s):
     if not s:
@@ -40,37 +40,50 @@ def _safe_table(sb, HOUSEHOLD_ID, name: str):
     try:
         return sb.table(name).select("*").eq("household_id", HOUSEHOLD_ID).execute().data or []
     except Exception as e:
-        # st.error(f"Erro ao buscar tabela '{name}' via _safe_table: {e}") # Descomente para debug se necessário
+        # st.error(f"Erro ao buscar tabela '{name}' via _safe_table: {e}")  # debug opcional
         return []
 
 # --- Fetchers de Dados ---
 # Todas as funções fetcher precisarão de 'sb' e 'HOUSEHOLD_ID'
 
-# Adicionado hash_funcs para o objeto Supabase Client
 @st.cache_data(ttl=600, hash_funcs={Client: lambda _: None})
 def fetch_members(sb, HOUSEHOLD_ID):
     try:
-        # CORREÇÃO AQUI: Adicionei 'user_id' à seleção
-        return sb.table("members").select("id,display_name,role,user_id") \
-            .eq("household_id", HOUSEHOLD_ID).order("display_name").execute().data
+        # inclui user_id para mapeamentos usuário↔membro
+        return (
+            sb.table("members")
+              .select("id,display_name,role,user_id")
+              .eq("household_id", HOUSEHOLD_ID)
+              .order("display_name")
+              .execute()
+              .data
+        )
     except Exception as e:
-        st.error(f"Erro ao buscar membros: {e}") # Feedback mais claro se a consulta principal falhar
-        return _safe_table(sb, HOUSEHOLD_ID, "members") # Fallback para _safe_table
+        st.error(f"Erro ao buscar membros: {e}")
+        return _safe_table(sb, HOUSEHOLD_ID, "members")
 
-# Adicionado hash_funcs para o objeto Supabase Client
 @st.cache_data(ttl=600, hash_funcs={Client: lambda _: None})
 def fetch_categories(sb, HOUSEHOLD_ID):
     try:
-        return sb.table("categories").select("id,name,kind") \
-            .eq("household_id", HOUSEHOLD_ID).order("name").execute().data
+        return (
+            sb.table("categories")
+              .select("id,name,kind")
+              .eq("household_id", HOUSEHOLD_ID)
+              .order("name")
+              .execute()
+              .data
+        )
     except Exception as e:
         st.error(f"Erro ao buscar categorias: {e}")
         return _safe_table(sb, HOUSEHOLD_ID, "categories")
 
-# Adicionado hash_funcs para o objeto Supabase Client
 @st.cache_data(ttl=600, hash_funcs={Client: lambda _: None})
 def fetch_accounts(sb, HOUSEHOLD_ID, active_only=False):
-    q = sb.table("accounts").select("id,name,is_active,type,opening_balance").eq("household_id", HOUSEHOLD_ID) # Adicionei opening_balance
+    q = (
+        sb.table("accounts")
+          .select("id,name,is_active,type,opening_balance")
+          .eq("household_id", HOUSEHOLD_ID)
+    )
     if active_only:
         q = q.eq("is_active", True)
     try:
@@ -78,14 +91,16 @@ def fetch_accounts(sb, HOUSEHOLD_ID, active_only=False):
     except Exception as e:
         st.error(f"Erro ao buscar contas: {e}")
         data = _safe_table(sb, HOUSEHOLD_ID, "accounts")
-    data.sort(key=lambda a:(a.get("name") or "").lower())
+    data.sort(key=lambda a: (a.get("name") or "").lower())
     return data
 
-# Adicionado hash_funcs para o objeto Supabase Client
 @st.cache_data(ttl=600, hash_funcs={Client: lambda _: None})
 def fetch_cards(sb, HOUSEHOLD_ID, active_only=True):
-    q = sb.table("credit_cards").select("id,household_id,name,limit_amount,closing_day,due_day,is_active,created_by") \
-        .eq("household_id", HOUSEHOLD_ID)
+    q = (
+        sb.table("credit_cards")
+          .select("id,household_id,name,limit_amount,closing_day,due_day,is_active,created_by")
+          .eq("household_id", HOUSEHOLD_ID)
+    )
     if active_only:
         q = q.eq("is_active", True)
     try:
@@ -93,45 +108,110 @@ def fetch_cards(sb, HOUSEHOLD_ID, active_only=True):
     except Exception as e:
         st.error(f"Erro ao buscar cartões: {e}")
         data = _safe_table(sb, HOUSEHOLD_ID, "credit_cards")
-    data.sort(key=lambda c:(c.get("name") or "").lower())
+    data.sort(key=lambda c: (c.get("name") or "").lower())
     return data
 
-# Adicionado hash_funcs para o objeto Supabase Client
 @st.cache_data(ttl=600, hash_funcs={Client: lambda _: None})
 def fetch_card_limits(sb, HOUSEHOLD_ID):
     try:
-        data = sb.table("v_card_limit").select("*").eq("household_id", HOUSEHOLD_ID).execute().data or []
+        data = (
+            sb.table("v_card_limit")
+              .select("*")
+              .eq("household_id", HOUSEHOLD_ID)
+              .execute()
+              .data
+            or []
+        )
     except Exception as e:
         st.error(f"Erro ao buscar limites de cartão: {e}")
-        data = [] # Não há _safe_table para views
-    data.sort(key=lambda c:(c.get("name") or "").lower())
+        data = []  # views não têm fallback _safe_table
+    data.sort(key=lambda c: (c.get("name") or "").lower())
     return data
 
-# Adicionado hash_funcs para o objeto Supabase Client
+# ========= MELHORIA: filtrar no banco com fallback local =========
+
 @st.cache_data(ttl=600, hash_funcs={Client: lambda _: None})
 def fetch_tx(sb, HOUSEHOLD_ID, start: date, end: date):
-    rows = _safe_table(sb, HOUSEHOLD_ID, "transactions") #_safe_table já possui cache implícito
-    out=[]
-    for t in rows:
-        d = _to_date_safe(t.get("occurred_at"))
-        if d and start <= d <= end:
-            out.append(t)
-    out.sort(key=lambda t: (_to_date_safe(t.get("due_date")) or _to_date_safe(t.get("occurred_at")) or date.min))
-    return out
+    """
+    Busca transações pelo occurred_at no intervalo [start, end].
+    Tenta filtrar no banco (performático). Se falhar, cai no fallback local.
+    """
+    try:
+        data = (
+            sb.table("transactions")
+              .select("*")
+              .eq("household_id", HOUSEHOLD_ID)
+              .gte("occurred_at", start.isoformat())
+              .lte("occurred_at", end.isoformat())
+              .order("occurred_at", desc=False)
+              .execute()
+              .data
+            or []
+        )
+        return data
+    except Exception:
+        # Fallback local (comportamento antigo)
+        rows = _safe_table(sb, HOUSEHOLD_ID, "transactions")
+        out = []
+        for t in rows:
+            d = _to_date_safe(t.get("occurred_at"))
+            if d and start <= d <= end:
+                out.append(t)
+        out.sort(key=lambda t: (_to_date_safe(t.get("occurred_at")) or date.min))
+        return out
 
-# Adicionado hash_funcs para o objeto Supabase Client
 @st.cache_data(ttl=600, hash_funcs={Client: lambda _: None})
 def fetch_tx_due(sb, HOUSEHOLD_ID, start: date, end: date):
-    rows = _safe_table(sb, HOUSEHOLD_ID, "transactions") #_safe_table já possui cache implícito
-    out=[]
-    for t in rows:
-        dd = _to_date_safe(t.get("due_date"))
-        od = _to_date_safe(t.get("occurred_at"))
-        key = dd or od
-        if key and start <= key <= end:
-            out.append(t)
-    out.sort(key=lambda t: (_to_date_safe(t.get("due_date")) or _to_date_safe(t.get("occurred_at")) or date.min))
-    return out
+    """
+    Busca transações por data de vencimento. Regra:
+      - Se due_date não for NULL: usa due_date no intervalo.
+      - Se due_date for NULL: usa occurred_at no intervalo (mesma lógica antiga).
+    Implementado com duas consultas (sem exigir view); mantém fallback local.
+    """
+    try:
+        # 1) Com due_date no intervalo
+        with_due = (
+            sb.table("transactions")
+              .select("*")
+              .eq("household_id", HOUSEHOLD_ID)
+              .gte("due_date", start.isoformat())
+              .lte("due_date", end.isoformat())
+              .order("due_date", desc=False)
+              .execute()
+              .data
+            or []
+        )
+        # 2) Sem due_date (NULL): considerar occurred_at no intervalo
+        without_due = (
+            sb.table("transactions")
+              .select("*")
+              .eq("household_id", HOUSEHOLD_ID)
+              .is_("due_date", "null")
+              .gte("occurred_at", start.isoformat())
+              .lte("occurred_at", end.isoformat())
+              .order("occurred_at", desc=False)
+              .execute()
+              .data
+            or []
+        )
+        data = with_due + without_due
+        # Ordena pelo mesmo critério utilizado anteriormente (due_date ou occurred_at)
+        data.sort(
+            key=lambda t: (_to_date_safe(t.get("due_date")) or _to_date_safe(t.get("occurred_at")) or date.min)
+        )
+        return data
+    except Exception:
+        # Fallback local (comportamento antigo)
+        rows = _safe_table(sb, HOUSEHOLD_ID, "transactions")
+        out = []
+        for t in rows:
+            dd = _to_date_safe(t.get("due_date"))
+            od = _to_date_safe(t.get("occurred_at"))
+            key = dd or od
+            if key and start <= key <= end:
+                out.append(t)
+        out.sort(key=lambda t: (_to_date_safe(t.get("due_date")) or _to_date_safe(t.get("occurred_at")) or date.min))
+        return out
 
 # --- SMTP (opcional) ---
 def _smtp_cfg():
@@ -139,7 +219,7 @@ def _smtp_cfg():
     if hasattr(st, "secrets") and st.secrets and "smtp" in st.secrets:
         cfg = st.secrets["smtp"]
     else:
-        return None # Nenhuma configuração SMTP encontrada
+        return None  # Nenhuma configuração SMTP encontrada
 
     if not cfg:
         return None
@@ -195,17 +275,17 @@ def notify_due_bills(sb, HOUSEHOLD_ID, user):
             return
 
         # filtra despesas não pagas
-        pend = [t for t in txs if (t.get("type")=="expense" and not t.get("is_paid"))]
+        pend = [t for t in txs if (t.get("type") == "expense" and not t.get("is_paid"))]
         if not pend:
             st.session_state[key] = True
             return
 
-        to = [user.email] if user and user.email else []
+        to = [user.email] if user and getattr(user, "email", None) else []
         if not to:
             st.session_state[key] = True
             return
 
-        lines=[]
+        lines = []
         for t in pend:
             due = _to_date_safe(t.get("due_date")) or _to_date_safe(t.get("occurred_at"))
             val = t.get("planned_amount") or t.get("amount") or 0.0
