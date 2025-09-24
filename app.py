@@ -1,4 +1,4 @@
-# app.py — Family Finance (Login fullscreen, sem page_link)
+# app.py — Family Finance (Login fullscreen, sempre mostra formulário)
 from __future__ import annotations
 import streamlit as st
 from ff_shared import inject_css, sb, user, bootstrap
@@ -6,18 +6,7 @@ from ff_shared import inject_css, sb, user, bootstrap
 st.set_page_config(page_title="Family Finance — Login", layout="wide")
 inject_css()
 
-# ======= Se já logado, tenta ir para Entrada =======
-u = user()
-if u:
-    try:
-        bootstrap(u.id)
-        st.switch_page("pages/1_Entrada.py")
-    except Exception:
-        # sem page_link para evitar KeyError
-        st.success("Você já está logado. Abra o menu de páginas (☰) e entre em ‘Entrada’.")
-    st.stop()
-
-# ======= CSS do mockup =======
+# ===== CSS do mockup =====
 st.markdown("""
 <style>
 html, body, [data-testid="stAppViewContainer"] { height: 100%; }
@@ -29,7 +18,8 @@ div.login-card {
   width: 460px; max-width: 92%;
   background: rgba(10,20,30,.55); backdrop-filter: blur(6px);
   border-radius: 18px; border: 1px solid rgba(255,255,255,.08);
-  box-shadow: 0 18px 50px rgba(0,0,0,.45); padding: 28px 26px 24px; color: #eaf3ff;
+  box-shadow: 0 18px 50px rgba(0,0,0,.45);
+  padding: 28px 26px 24px; color: #eaf3ff;
 }
 .logo-wrap { text-align:center; margin-top: -6px; }
 .logo-wrap img { width: 130px; height:auto; }
@@ -49,14 +39,34 @@ div.login-card {
 </style>
 """, unsafe_allow_html=True)
 
-# ======= Layout =======
+# ==== Banner de sessão (se existir) + ações rápidas ====
+u = user()
+if u:
+    email_logado = getattr(u, "email", "") or "(usuário autenticado)"
+    colA, colB, colC = st.columns([3,1,1])
+    with colA:
+        st.success(f"Você já está logado como **{email_logado}**.")
+    with colB:
+        if st.button("Ir para Entrada"):
+            try:
+                bootstrap(u.id)
+                st.switch_page("pages/1_Entrada.py")
+            except Exception:
+                st.info("Login ok. Abra o menu (☰) e entre em ‘Entrada’.")
+    with colC:
+        if st.button("Sair"):
+            sb.auth.sign_out()
+            st.session_state.clear()
+            st.experimental_rerun()
+
+# ===== Layout do cartão =====
 st.markdown('<div class="login-bg"><div class="login-card">', unsafe_allow_html=True)
 st.markdown('<div class="logo-wrap"><img src="assets/logo_family_finance.png"/></div>', unsafe_allow_html=True)
 st.markdown('<div class="login-title">Family Finance</div>', unsafe_allow_html=True)
 
 st.markdown('<div class="login-input">', unsafe_allow_html=True)
 email = st.text_input("Username", placeholder="you@email.com", key="login_email")
-pwd = st.text_input("Password", placeholder="••••••••", type="password", key="login_pwd")
+pwd   = st.text_input("Password", placeholder="••••••••", type="password", key="login_pwd")
 st.markdown('</div>', unsafe_allow_html=True)
 
 c1, c2 = st.columns([1, 1])
@@ -69,25 +79,21 @@ st.markdown('<div class="login-button">', unsafe_allow_html=True)
 signin = st.button("Sign in", use_container_width=True)
 st.markdown('</div>', unsafe_allow_html=True)
 
-# ======= Ações =======
-def go_home():
+# ===== Ações =====
+def go_home(uid: str):
     try:
+        bootstrap(uid)
         st.switch_page("pages/1_Entrada.py")
     except Exception:
-        # nada de page_link aqui; só instrução segura
         st.success("Login ok! Abra o menu de páginas (☰) e vá para ‘Entrada’.")
-        # como fallback, força um rerun (às vezes o multipage aparece após primeiro run)
         st.experimental_rerun()
 
 if signin:
     try:
         sb.auth.sign_in_with_password({"email": email.strip(), "password": pwd})
         u2 = user()
-        if u2:
-            bootstrap(u2.id)
-            go_home()
-        else:
-            st.error("Falha ao autenticar.")
+        if u2: go_home(u2.id)
+        else:  st.error("Falha ao autenticar.")
     except Exception as e:
         st.error(f"Falha no login: {e}")
 
