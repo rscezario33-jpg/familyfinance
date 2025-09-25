@@ -580,15 +580,30 @@ def render_family_tab():
             "other": "Outro",
         }[k]
     )
-    # ======= ÚNICA ALTERAÇÃO: usar colunas do seu schema =======
+    # ======= ALTERAÇÃO: merge manual (SELECT -> UPDATE/INSERT), sem exigir UNIQUE =======
     if st.button("Salvar relação", use_container_width=True):
         try:
-            sb.table("relationships").upsert({
-                "household_id": HOUSEHOLD_ID,
-                "from_member_id": left["id"],
-                "to_member_id": right["id"],
-                "relationship_type": relation
-            }, on_conflict="household_id,from_member_id,to_member_id").execute()
+            existing = sb.table("relationships") \
+                .select("id") \
+                .eq("household_id", HOUSEHOLD_ID) \
+                .eq("from_member_id", left["id"]) \
+                .eq("to_member_id", right["id"]) \
+                .limit(1) \
+                .execute().data
+
+            if existing:
+                rel_id = existing[0]["id"]
+                sb.table("relationships").update({
+                    "relationship_type": relation
+                }).eq("id", rel_id).execute()
+            else:
+                sb.table("relationships").insert({
+                    "household_id": HOUSEHOLD_ID,
+                    "from_member_id": left["id"],
+                    "to_member_id": right["id"],
+                    "relationship_type": relation
+                }).execute()
+
             _toast("Relação salva!")
         except Exception as e:
             st.error(f"Erro ao salvar relação: {e}")
@@ -603,7 +618,6 @@ def render_family_tab():
             def name(mid):
                 m = next((x for x in mems if x["id"] == mid), None)
                 return m["display_name"] if m else mid
-            # ======= ÚNICA ALTERAÇÃO: ler colunas corretas =======
             df = pd.DataFrame([{
                 "A": name(r["from_member_id"]),
                 "Relação": r["relationship_type"],
